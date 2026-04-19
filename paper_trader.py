@@ -6,10 +6,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import config
 
 logger = logging.getLogger(__name__)
+
+
+def _now_local() -> datetime:
+    try:
+        return datetime.now(ZoneInfo(config.LOCAL_TIMEZONE))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -21,8 +29,9 @@ class Trade:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __str__(self) -> str:
+        local_ts = self.timestamp.astimezone(_now_local().tzinfo)
         return (
-            f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}] "
+            f"[{local_ts.strftime('%Y-%m-%d %H:%M:%S %Z')}] "
             f"{self.side:4s} {self.quantity:.6f} {self.symbol} @ ${self.price:,.2f}"
         )
 
@@ -113,7 +122,7 @@ class PaperTrader:
         total, pnl, pnl_pct = self.pnl_metrics(prices)
 
         logger.info("=" * 60)
-        logger.info("  Portefeuille — %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+        logger.info("  Portefeuille - %s", _now_local().strftime("%Y-%m-%d %H:%M %Z"))
         logger.info("  USDT liquide  : $%.2f", self.usdt_balance)
         for symbol, qty in self.positions.items():
             price = prices.get(symbol, 0.0)
@@ -139,7 +148,7 @@ class PaperTrader:
                 }
             )
         return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": _now_local().isoformat(),
             "usdt_balance": self.usdt_balance,
             "portfolio_value": total,
             "pnl": pnl,

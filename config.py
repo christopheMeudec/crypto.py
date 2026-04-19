@@ -47,6 +47,7 @@ API_ENABLED = os.getenv("API_ENABLED", "true").lower() == "true"
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 API_TOKEN = os.getenv("API_TOKEN", "")
+LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "Europe/Paris")
 
 # --- Optimisation des timeframes ---
 OPTIMIZATION_TIMEFRAMES = ["15m","30m", "1h", "4h"]
