@@ -11,7 +11,9 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_SEND_LOOP_SUMMARY = True
+TELEGRAM_SEND_LOOP_SUMMARY = False
+TELEGRAM_ENABLE_COMMANDS = True
+TELEGRAM_POLL_INTERVAL_SECONDS = 5
 
 # --- Pairs & timeframe ---
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
@@ -34,6 +36,17 @@ MACD_SIGNAL = 5
 
 # --- Boucle principale ---
 LOOP_INTERVAL_SECONDS = 900  # une itération toutes les 15 minutes (aligné sur timeframe 15m)
+
+# --- Persistance locale ---
+DATA_DIR = os.getenv("DATA_DIR", "data")
+MAX_STORED_TRADES = int(os.getenv("MAX_STORED_TRADES", "2000"))
+MAX_STORED_SNAPSHOTS = int(os.getenv("MAX_STORED_SNAPSHOTS", "3000"))
+
+# --- API mobile (lecture seule) ---
+API_ENABLED = os.getenv("API_ENABLED", "true").lower() == "true"
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
+API_TOKEN = os.getenv("API_TOKEN", "")
 
 # --- Optimisation des timeframes ---
 OPTIMIZATION_TIMEFRAMES = ["15m","30m", "1h", "4h"]

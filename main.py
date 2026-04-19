@@ -7,9 +7,11 @@ Mode      : Paper trading (aucun ordre réel)
 
 import argparse
 import logging
+import threading
 import time
 
 import config
+from api_server import start_server_in_thread
 from data_fetcher import fetch_ohlcv
 from optimizer import optimize_timeframes
 from paper_trader import PaperTrader
@@ -35,9 +37,70 @@ def run() -> None:
     trader = PaperTrader(initial_capital=config.INITIAL_CAPITAL_USDT)
     notifier = TelegramNotifier.from_config()
     latest_prices: dict[str, float] = {}
+    state_lock = threading.Lock()
 
     logger.info("Bot démarré | Capital initial : $%.2f USDT", config.INITIAL_CAPITAL_USDT)
     logger.info("Paires : %s | Timeframe : %s", config.SYMBOLS, config.TIMEFRAME)
+
+    if config.API_ENABLED:
+        def state_provider() -> dict:
+            with state_lock:
+                prices = dict(latest_prices)
+                snapshot = trader.create_snapshot(prices)
+                return {
+                    "stats": snapshot,
+                    "positions": snapshot["positions"],
+                    "trades": trader.get_recent_trades(limit=200),
+                    "history": trader.get_history(limit=1000),
+                }
+
+        start_server_in_thread(state_provider)
+
+    if notifier.enabled and config.TELEGRAM_ENABLE_COMMANDS:
+        def command_handler(command: str, args: list[str]) -> str:
+            with state_lock:
+                prices = dict(latest_prices)
+                snapshot = trader.create_snapshot(prices)
+
+            cmd = command.lower()
+            if cmd in {"stats", "pnl"}:
+                return (
+                    "Stats portefeuille\n"
+                    f"USDT: ${snapshot['usdt_balance']:,.2f}\n"
+                    f"Portfolio: ${snapshot['portfolio_value']:,.2f}\n"
+                    f"PnL: {snapshot['pnl']:+,.2f} USDT ({snapshot['pnl_pct']:+.2f}%)\n"
+                    f"Trades: {snapshot['trade_count']}"
+                )
+            if cmd in {"positions", "pos"}:
+                positions = snapshot["positions"]
+                if not positions:
+                    return "Aucune position ouverte."
+                lines = ["Positions ouvertes"]
+                for item in positions:
+                    lines.append(
+                        f"- {item['symbol']}: {item['quantity']:.6f} (~${item['value']:,.2f})"
+                    )
+                return "\n".join(lines)
+            if cmd == "trades":
+                limit = 5
+                if args:
+                    try:
+                        limit = int(args[0])
+                    except ValueError:
+                        pass
+                rows = trader.get_recent_trades(limit=max(1, min(limit, 20)))
+                if not rows:
+                    return "Aucun trade enregistre pour le moment."
+                lines = ["Derniers trades"]
+                for t in rows:
+                    lines.append(
+                        f"- {t['timestamp'][:19]} | {t['side']} {t['symbol']} @ ${t['price']:,.2f} | q={t['quantity']:.6f}"
+                    )
+                return "\n".join(lines)
+            return "Commandes: /stats, /positions, /trades [N]"
+
+        notifier.start_command_listener(command_handler)
+
     if notifier.enabled:
         notifier.send_message(
             f"Bot started\nPairs: {', '.join(config.SYMBOLS)}\nTimeframe: {config.TIMEFRAME}\nCapital: ${config.INITIAL_CAPITAL_USDT:,.2f}"
@@ -53,7 +116,8 @@ def run() -> None:
                 df = fetch_ohlcv(symbol, config.TIMEFRAME)
                 current_price = float(df["close"].iloc[-1])
                 prices[symbol] = current_price
-                latest_prices[symbol] = current_price
+                with state_lock:
+                    latest_prices[symbol] = current_price
 
                 signal = get_signal(df)
                 logger.info("[%s] Prix : $%.2f  |  Signal : %s", symbol, current_price, signal)
@@ -65,7 +129,9 @@ def run() -> None:
                     trade = trader.sell(symbol, current_price)
 
                 if trade and notifier.enabled:
-                    total, pnl, pnl_pct = trader.pnl_metrics(latest_prices)
+                    with state_lock:
+                        prices_for_metrics = dict(latest_prices)
+                    total, pnl, pnl_pct = trader.pnl_metrics(prices_for_metrics)
                     notifier.send_trade(
                         symbol=trade.symbol,
                         side=trade.side,
@@ -81,12 +147,15 @@ def run() -> None:
                 logger.error("[%s] Erreur lors du traitement : %s", symbol, exc)
 
         # Résumé du portefeuille après chaque itération
-        trader.print_summary(latest_prices)
+        with state_lock:
+            current_prices = dict(latest_prices)
+        trader.print_summary(current_prices)
+        trader.record_snapshot(current_prices)
 
         if notifier.enabled and config.TELEGRAM_SEND_LOOP_SUMMARY:
-            total, pnl, pnl_pct = trader.pnl_metrics(latest_prices)
+            total, pnl, pnl_pct = trader.pnl_metrics(current_prices)
             notifier.send_loop_summary(
-                prices=latest_prices,
+                prices=current_prices,
                 total_value=total,
                 pnl=pnl,
                 pnl_pct=pnl_pct,
