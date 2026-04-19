@@ -241,9 +241,9 @@ class MobileAPIServer:
                 parsed = urlparse(self.path)
                 query = parse_qs(parsed.query)
 
-              if parsed.path == "/health":
-                self._send_json({"status": "ok"})
-                return
+                if parsed.path == "/health":
+                    self._send_json({"status": "ok"})
+                    return
 
                 if not self._is_authorized(query):
                     self._deny()
