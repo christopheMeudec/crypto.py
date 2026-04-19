@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 import time
 from typing import Callable, Dict
@@ -43,7 +44,7 @@ class TelegramNotifier:
         query = parse.urlencode(params)
         url = f"https://api.telegram.org/bot{self.bot_token}/{method}?{query}"
         req = request.Request(url, method="GET")
-        with request.urlopen(req, timeout=15) as resp:
+        with request.urlopen(req, timeout=config.TELEGRAM_HTTP_TIMEOUT_SECONDS) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             data = json.loads(body)
         if not data.get("ok", False):
@@ -51,8 +52,11 @@ class TelegramNotifier:
             return {}
         return data
 
-    def _poll_updates(self, offset: int | None = None) -> tuple[list[dict], int | None]:
-        params = {"timeout": "25", "allowed_updates": json.dumps(["message"])}
+    def _poll_updates(self, offset: int | None = None) -> tuple[list[dict], int | None, bool]:
+        params = {
+            "timeout": str(config.TELEGRAM_LONG_POLL_TIMEOUT_SECONDS),
+            "allowed_updates": json.dumps(["message"]),
+        }
         if offset is not None:
             params["offset"] = str(offset)
         try:
@@ -63,10 +67,27 @@ class TelegramNotifier:
                 update_id = item.get("update_id")
                 if isinstance(update_id, int):
                     next_offset = update_id + 1
-            return items, next_offset
-        except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            return items, next_offset, False
+        except socket.timeout:
+            logger.debug("Telegram long poll timed out without new messages.")
+            return [], offset, False
+        except error.HTTPError as exc:
+            if exc.code == 409:
+                logger.warning(
+                    "Telegram polling conflict (HTTP 409): another bot instance or webhook is already using getUpdates."
+                )
+            else:
+                logger.warning("Telegram polling failed: %s", exc)
+            return [], offset, True
+        except error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout):
+                logger.debug("Telegram long poll timed out without new messages.")
+                return [], offset, False
             logger.warning("Telegram polling failed: %s", exc)
-            return [], offset
+            return [], offset, True
+        except (TimeoutError, json.JSONDecodeError) as exc:
+            logger.warning("Telegram polling failed: %s", exc)
+            return [], offset, True
 
     def start_command_listener(self, handler: Callable[[str, list[str]], str]) -> None:
         if not self.enabled:
@@ -76,7 +97,7 @@ class TelegramNotifier:
             logger.info("Telegram command listener actif.")
             offset = None
             while True:
-                updates, offset = self._poll_updates(offset)
+                updates, offset, had_error = self._poll_updates(offset)
                 for update in updates:
                     message = update.get("message", {})
                     chat = message.get("chat", {})
@@ -103,7 +124,8 @@ class TelegramNotifier:
                         response = "Erreur interne sur la commande."
                     self.send_message(response)
 
-                time.sleep(max(1, config.TELEGRAM_POLL_INTERVAL_SECONDS))
+                if had_error:
+                    time.sleep(max(1, config.TELEGRAM_POLL_ERROR_BACKOFF_SECONDS))
 
         thread = threading.Thread(target=loop, name="telegram-cmd", daemon=True)
         thread.start()
