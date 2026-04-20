@@ -104,6 +104,18 @@ def _dashboard_html() -> str:
       font-size: 0.85rem;
       opacity: 0.75;
     }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab-btn { padding: 7px 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); cursor: pointer; font-size: 0.9rem; color: var(--text); font-family: inherit; transition: all .15s; }
+    .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .tab-btn:hover:not(.active) { background: var(--bg); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 12px; background: var(--accent); color: #fff; font-size: 0.85rem; margin: 3px; font-weight: 600; }
+    .cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 8px; }
+    .cfg-item { background: var(--bg); border-radius: 8px; padding: 8px 12px; }
+    .cfg-item .label { margin-bottom: 3px; }
+    .cfg-item .value { font-size: 0.95rem; font-weight: 600; }
+    .cfg-title { font-size: 0.78rem; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.7px; margin: 12px 0 4px; }
   </style>
 </head>
 <body>
@@ -111,6 +123,12 @@ def _dashboard_html() -> str:
     <h1>Crypto Bot</h1>
     <p class=\"sub\">Dashboard mobile - mise a jour automatique toutes les 10s</p>
 
+    <div class=\"tabs\">
+      <button class=\"tab-btn active\" data-tab=\"dashboard\">Dashboard</button>
+      <button class=\"tab-btn\" data-tab=\"config\">Configuration</button>
+    </div>
+
+    <div id=\"tab-dashboard\" class=\"tab-panel active\">
     <div class=\"grid\">
       <div class=\"card\"><div class=\"label\">Portefeuille</div><div id=\"portfolio\" class=\"value\">-</div></div>
       <div class=\"card\"><div class=\"label\">PnL</div><div id=\"pnl\" class=\"value\">-</div></div>
@@ -134,6 +152,11 @@ def _dashboard_html() -> str:
     </div>
 
     <div id=\"updated\" class=\"footer\">Derniere mise a jour: -</div>
+    </div>
+
+    <div id=\"tab-config\" class=\"tab-panel\">
+      <div id=\"config-content\"><p style=\"opacity:0.7;padding:8px 0\">Chargement...</p></div>
+    </div>
   </div>
 
   <script>
@@ -197,6 +220,84 @@ def _dashboard_html() -> str:
 
     load();
     setInterval(load, 10000);
+
+    // --- Tab switching ---
+    let configLoaded = false;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const panel = document.getElementById('tab-' + btn.dataset.tab);
+        if (panel) panel.classList.add('active');
+        if (btn.dataset.tab === 'config' && !configLoaded) loadConfig();
+      });
+    });
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config', { headers });
+        if (!res.ok) throw new Error('err');
+        const c = await res.json();
+        configLoaded = true;
+        renderConfig(c);
+      } catch(e) {
+        document.getElementById('config-content').textContent = 'Erreur de chargement.';
+      }
+    }
+
+    function renderConfig(c) {
+      const sym = c.symbols.map(s => `<span class=\"badge\">${s}</span>`).join(' ');
+      const stopsLbl = c.stops.enabled
+        ? '<span class=\"pos\">Actif</span>'
+        : '<span class=\"neg\">Inactif</span>';
+      document.getElementById('config-content').innerHTML = `
+        <div class=\"card\" style=\"margin-bottom:12px\">
+          <div class=\"label\">Symboles trades</div>
+          <div style=\"margin-top:8px\">${sym}</div>
+          <div class=\"cfg-grid\" style=\"margin-top:10px\">
+            <div class=\"cfg-item\"><div class=\"label\">Timeframe</div><div class=\"value\">${c.timeframe}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Bougies</div><div class=\"value\">${c.ohlcv_limit}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Intervalle</div><div class=\"value\">${c.loop_interval_seconds}s</div></div>
+          </div>
+        </div>
+        <div class=\"card\" style=\"margin-bottom:12px\">
+          <div class=\"label\">Paper Trading</div>
+          <div class=\"cfg-grid\">
+            <div class=\"cfg-item\"><div class=\"label\">Capital initial</div><div class=\"value\">${fmtUsd(c.initial_capital)}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Allocation/trade</div><div class=\"value\">${(c.trade_allocation * 100).toFixed(0)}%</div></div>
+          </div>
+        </div>
+        <div class=\"card\" style=\"margin-bottom:12px\">
+          <div class=\"label\">Strategie</div>
+          <div class=\"cfg-title\">RSI</div>
+          <div class=\"cfg-grid\">
+            <div class=\"cfg-item\"><div class=\"label\">Periode</div><div class=\"value\">${c.rsi.period}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Survente</div><div class=\"value\">${c.rsi.oversold}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Surachat</div><div class=\"value\">${c.rsi.overbought}</div></div>
+          </div>
+          <div class=\"cfg-title\">MACD</div>
+          <div class=\"cfg-grid\">
+            <div class=\"cfg-item\"><div class=\"label\">Rapide</div><div class=\"value\">${c.macd.fast}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Lent</div><div class=\"value\">${c.macd.slow}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Signal</div><div class=\"value\">${c.macd.signal}</div></div>
+          </div>
+        </div>
+        <div class=\"card\" style=\"margin-bottom:12px\">
+          <div class=\"label\">Gestion du risque ${stopsLbl}</div>
+          <div class=\"cfg-grid\">
+            <div class=\"cfg-item\"><div class=\"label\">Stop-Loss</div><div class=\"value neg\">${c.stops.stop_loss_pct}%</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Take-Profit</div><div class=\"value pos\">+${c.stops.take_profit_pct}%</div></div>
+          </div>
+        </div>
+        <div class=\"card\">
+          <div class=\"label\">Frais &amp; Slippage</div>
+          <div class=\"cfg-grid\">
+            <div class=\"cfg-item\"><div class=\"label\">Frais taker</div><div class=\"value\">${c.fees.taker_fee_pct}%</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Slippage</div><div class=\"value\">${c.fees.slippage_pct}%</div></div>
+          </div>
+        </div>`;
+    }
   </script>
 </body>
 </html>
@@ -277,6 +378,35 @@ class MobileAPIServer:
                         pass
                     history = state.get("history", [])[-max(1, min(limit, 1000)) :]
                     self._send_json({"items": history})
+                    return
+                if parsed.path == "/api/config":
+                    self._send_json({
+                        "symbols": config.SYMBOLS,
+                        "timeframe": config.TIMEFRAME,
+                        "ohlcv_limit": config.OHLCV_LIMIT,
+                        "initial_capital": config.INITIAL_CAPITAL_USDT,
+                        "trade_allocation": config.TRADE_ALLOCATION,
+                        "rsi": {
+                            "period": config.RSI_PERIOD,
+                            "oversold": config.RSI_OVERSOLD,
+                            "overbought": config.RSI_OVERBOUGHT,
+                        },
+                        "macd": {
+                            "fast": config.MACD_FAST,
+                            "slow": config.MACD_SLOW,
+                            "signal": config.MACD_SIGNAL,
+                        },
+                        "stops": {
+                            "enabled": config.ENABLE_STOPS,
+                            "stop_loss_pct": config.STOP_LOSS_PCT,
+                            "take_profit_pct": config.TAKE_PROFIT_PCT,
+                        },
+                        "fees": {
+                            "taker_fee_pct": config.TAKER_FEE_PCT,
+                            "slippage_pct": config.SLIPPAGE_PCT,
+                        },
+                        "loop_interval_seconds": config.LOOP_INTERVAL_SECONDS,
+                    })
                     return
 
                 self._send_json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)

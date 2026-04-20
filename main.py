@@ -97,7 +97,23 @@ def run() -> None:
                         f"- {t['timestamp'][:19]} | {t['side']} {t['symbol']} @ ${t['price']:,.2f} | q={t['quantity']:.6f}"
                     )
                 return "\n".join(lines)
-            return "Commandes: /stats, /positions, /trades [N]"
+            if cmd == "symbols":
+                lines = ["\U0001f4ca Symboles trades"]
+                for s in config.SYMBOLS:
+                    lines.append(f"  - {s}")
+                lines.append(f"Timeframe: {config.TIMEFRAME} | Intervalle: {config.LOOP_INTERVAL_SECONDS}s")
+                return "\n".join(lines)
+            if cmd == "config":
+                stops = "Actif" if config.ENABLE_STOPS else "Inactif"
+                return (
+                    "\u2699\ufe0f Configuration\n"
+                    f"Capital: ${config.INITIAL_CAPITAL_USDT:,.0f} USDT | Alloc: {config.TRADE_ALLOCATION * 100:.0f}%\n"
+                    f"RSI({config.RSI_PERIOD}): survente={config.RSI_OVERSOLD} surachat={config.RSI_OVERBOUGHT}\n"
+                    f"MACD: {config.MACD_FAST}/{config.MACD_SLOW}/{config.MACD_SIGNAL}\n"
+                    f"SL: {config.STOP_LOSS_PCT}% | TP: +{config.TAKE_PROFIT_PCT}% ({stops})\n"
+                    f"Frais: {config.TAKER_FEE_PCT}% | Slippage: {config.SLIPPAGE_PCT}%"
+                )
+            return "Commandes: /stats, /positions, /trades [N], /symbols, /config"
 
         notifier.start_command_listener(command_handler)
 
