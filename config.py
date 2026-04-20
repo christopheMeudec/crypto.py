@@ -20,7 +20,7 @@ TELEGRAM_POLL_ERROR_BACKOFF_SECONDS = int(os.getenv("TELEGRAM_POLL_ERROR_BACKOFF
 
 # --- Pairs & timeframe ---
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
-TIMEFRAME = "15m"          # '1m', '5m', '15m', '1h', '4h', '1d'
+TIMEFRAME = "1h"          # '1m', '5m', '15m', '1h', '4h', '1d'
 OHLCV_LIMIT = 200         # nombre de bougies à récupérer
 
 # --- Paper trading ---
@@ -39,15 +39,15 @@ MACD_SIGNAL = 5
 
 # --- Gestion du risque : Stop-Loss & Take-Profit ---
 ENABLE_STOPS = True               # Activer/désactiver SL & TP
-STOP_LOSS_PCT = -3.0              # Stop-loss en % (ex: -3% = ferme à 97% du prix d'entrée)
-TAKE_PROFIT_PCT = 5.0             # Take-profit en % (ex: 5% = ferme à 105% du prix d'entrée)
+STOP_LOSS_PCT = -5.0              # Stop-loss en % (ex: -5% = ferme à 95% du prix d'entrée)
+TAKE_PROFIT_PCT = 10.0             # Take-profit en % (ex: 10% = ferme à 110% du prix d'entrée)
 
 # --- Frais & Slippage (simulation réaliste) ---
 TAKER_FEE_PCT = 0.1               # Frais taker Binance (0.1%)
 SLIPPAGE_PCT = 0.05               # Slippage moyen sur les ordres (0.05%)
 
 # --- Boucle principale ---
-LOOP_INTERVAL_SECONDS = 900  # une itération toutes les 15 minutes (aligné sur timeframe 15m)
+LOOP_INTERVAL_SECONDS = 3600  # une itération toutes les 1 heure (aligné sur timeframe 1h)
 
 # --- Persistance locale ---
 DATA_DIR = os.getenv("DATA_DIR", "data")

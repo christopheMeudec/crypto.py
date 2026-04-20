@@ -241,9 +241,58 @@ if __name__ == "__main__":
         default=config.OPTIMIZATION_OHLCV_LIMIT,
         help="Nombre de bougies OHLCV utilisees en mode optimisation",
     )
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="Run comprehensive backtest with advanced metrics (Sharpe, Sortino, etc.)",
+    )
+    parser.add_argument(
+        "--backtest-symbol",
+        type=str,
+        default="BTC/USDT",
+        help="Symbol for backtest (default: BTC/USDT)",
+    )
+    parser.add_argument(
+        "--backtest-days",
+        type=int,
+        default=30,
+        help="Days of history for backtest (default: 30)",
+    )
+    parser.add_argument(
+        "--backtest-timeframe",
+        type=str,
+        default="15m",
+        help="Timeframe for backtest (default: 15m)",
+    )
+    parser.add_argument(
+        "--backtest-export",
+        type=str,
+        default=None,
+        help="Export backtest results to JSON file",
+    )
+    
     args = parser.parse_args()
 
     if args.optimize:
         run_timeframe_optimization(history_limit=args.history_limit)
+    elif args.backtest:
+        from backtest import run_backtest, print_backtest_report
+        logger.info("Starting comprehensive backtest...")
+        metrics = run_backtest(
+            symbol=args.backtest_symbol,
+            timeframe=args.backtest_timeframe,
+            days_back=args.backtest_days,
+            initial_capital=config.INITIAL_CAPITAL_USDT,
+        )
+        print_backtest_report(metrics)
+        
+        if args.backtest_export:
+            import json
+            from pathlib import Path
+            output_file = Path(args.backtest_export)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_file, "w") as f:
+                json.dump(metrics.to_dict(), f, indent=2)
+            logger.info("Results exported to: %s", output_file)
     else:
         run()
