@@ -37,6 +37,15 @@ MACD_FAST = 8
 MACD_SLOW = 21
 MACD_SIGNAL = 5
 
+# --- Gestion du risque : Stop-Loss & Take-Profit ---
+ENABLE_STOPS = True               # Activer/désactiver SL & TP
+STOP_LOSS_PCT = -3.0              # Stop-loss en % (ex: -3% = ferme à 97% du prix d'entrée)
+TAKE_PROFIT_PCT = 5.0             # Take-profit en % (ex: 5% = ferme à 105% du prix d'entrée)
+
+# --- Frais & Slippage (simulation réaliste) ---
+TAKER_FEE_PCT = 0.1               # Frais taker Binance (0.1%)
+SLIPPAGE_PCT = 0.05               # Slippage moyen sur les ordres (0.05%)
+
 # --- Boucle principale ---
 LOOP_INTERVAL_SECONDS = 900  # une itération toutes les 15 minutes (aligné sur timeframe 15m)
 

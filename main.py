@@ -119,24 +119,45 @@ def run() -> None:
                 with state_lock:
                     latest_prices[symbol] = current_price
 
+                # Vérifier & fermer automatiquement les SL/TP
+                closed_entries = trader._auto_close_entries(symbol, current_price)
+                if closed_entries:
+                    logger.info("[%s] %d position(s) fermée(s) par SL/TP", symbol, len(closed_entries))
+
                 signal = get_signal(df)
                 logger.info("[%s] Prix : $%.2f  |  Signal : %s", symbol, current_price, signal)
 
-                trade = None
+                entry_result = None
                 if signal == "BUY":
-                    trade = trader.buy(symbol, current_price)
+                    entry_result = trader.buy(symbol, current_price)
                 elif signal == "SELL":
-                    trade = trader.sell(symbol, current_price)
+                    # Vérifier s'il y a des positions ouvertes à vendre
+                    if trader.get_total_quantity(symbol) > 0:
+                        entry_result = trader.sell(symbol, current_price)
+                    else:
+                        logger.info("[%s] Aucune position ouverte à vendre.", symbol)
 
-                if trade and notifier.enabled:
+                if entry_result and notifier.enabled:
                     with state_lock:
                         prices_for_metrics = dict(latest_prices)
                     total, pnl, pnl_pct = trader.pnl_metrics(prices_for_metrics)
+                    
+                    # Déterminer le side pour la notification
+                    if entry_result.status == "OPEN":
+                        side = "BUY"
+                        price = entry_result.entry_price
+                        quantity = entry_result.entry_quantity
+                    else:
+                        # Fermée (CLOSED, SL_HIT, TP_HIT)
+                        side = f"SELL ({entry_result.status})"
+                        price = entry_result.exit_price or entry_result.entry_price
+                        quantity = entry_result.entry_quantity
+                    
                     notifier.send_trade(
-                        symbol=trade.symbol,
-                        side=trade.side,
-                        price=trade.price,
-                        quantity=trade.quantity,
+                        symbol=symbol,
+                        side=side,
+                        price=price,
+                        quantity=quantity,
                         total_value=total,
                         pnl=pnl,
                         pnl_pct=pnl_pct,
@@ -160,7 +181,7 @@ def run() -> None:
                 pnl=pnl,
                 pnl_pct=pnl_pct,
                 usdt_balance=trader.usdt_balance,
-                positions=trader.positions,
+                positions=trader.get_positions_by_symbol(),
             )
 
         logger.info("Prochaine itération dans %d secondes…", config.LOOP_INTERVAL_SECONDS)
