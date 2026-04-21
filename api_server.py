@@ -116,6 +116,8 @@ def _dashboard_html() -> str:
     .cfg-item .label { margin-bottom: 3px; }
     .cfg-item .value { font-size: 0.95rem; font-weight: 600; }
     .cfg-title { font-size: 0.78rem; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.7px; margin: 12px 0 4px; }
+    .badge-majors { background: #1e5a7a; color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
+    .badge-alts { background: #b8641a; color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -247,49 +249,86 @@ def _dashboard_html() -> str:
     }
 
     function renderConfig(c) {
-      const sym = c.symbols.map(s => `<span class=\"badge\">${s}</span>`).join(' ');
+      const symbols = c.symbols;
+      const sym = symbols.map(s => `<span class=\"badge\">${s}</span>`).join(' ');
       const stopsLbl = c.stops.enabled
         ? '<span class=\"pos\">Actif</span>'
         : '<span class=\"neg\">Inactif</span>';
+
+      const strategyGroups = c.strategy_groups;
+      const groupCards = Object.entries(strategyGroups).map(([groupName, g]) => {
+        const groupSymbols = g.symbols.map(s => `<span class=\"badge\">${s}</span>`).join(' ');
+        return `
+          <div class=\"card\" style=\"margin-bottom:12px\">
+            <div class=\"label\">Groupe ${groupName}</div>
+            <div style=\"margin-top:8px\">${groupSymbols}</div>
+            <div class=\"cfg-grid\" style=\"margin-top:10px\">
+              <div class=\"cfg-item\"><div class=\"label\">Timeframe</div><div class=\"value\">${g.timeframe}</div></div>
+              <div class=\"cfg-item\"><div class=\"label\">Allocation</div><div class=\"value\">${(Number(g.trade_allocation) * 100).toFixed(0)}%</div></div>
+              <div class=\"cfg-item\"><div class=\"label\">RSI</div><div class=\"value\">${g.rsi_period} / ${g.rsi_oversold}-${g.rsi_overbought}</div></div>
+              <div class=\"cfg-item\"><div class=\"label\">MACD</div><div class=\"value\">${g.macd_fast} / ${g.macd_slow} / ${g.macd_signal}</div></div>
+              <div class=\"cfg-item\"><div class=\"label\">Stop-Loss</div><div class=\"value neg\">${g.stop_loss_pct}%</div></div>
+              <div class=\"cfg-item\"><div class=\"label\">Take-Profit</div><div class=\"value pos\">+${g.take_profit_pct}%</div></div>
+            </div>
+          </div>`;
+      }).join('');
+
+      const symbolProfiles = c.symbol_profiles;
+      const symbolRows = Object.entries(symbolProfiles).map(([symbol, p]) => {
+        const badgeClass = p.group === 'majors' ? 'badge-majors' : 'badge-alts';
+        return `
+        <tr>
+          <td>${symbol}</td>
+          <td><span class="${badgeClass}">${p.group}</span></td>
+          <td>${p.timeframe}</td>
+          <td>${(Number(p.trade_allocation) * 100).toFixed(0)}%</td>
+          <td>${p.stop_loss_pct}%</td>
+          <td>+${p.take_profit_pct}%</td>
+        </tr>
+      `;
+      }).join('');
+
       document.getElementById('config-content').innerHTML = `
         <div class=\"card\" style=\"margin-bottom:12px\">
           <div class=\"label\">Symboles trades</div>
           <div style=\"margin-top:8px\">${sym}</div>
           <div class=\"cfg-grid\" style=\"margin-top:10px\">
-            <div class=\"cfg-item\"><div class=\"label\">Timeframe</div><div class=\"value\">${c.timeframe}</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Timeframe global fallback</div><div class=\"value\">${c.timeframe}</div></div>
             <div class=\"cfg-item\"><div class=\"label\">Bougies</div><div class=\"value\">${c.ohlcv_limit}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Intervalle</div><div class=\"value\">${c.loop_interval_seconds}s</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Intervalle fallback</div><div class=\"value\">${c.loop_interval_seconds}s</div></div>
           </div>
         </div>
+
+        ${groupCards}
+
         <div class=\"card\" style=\"margin-bottom:12px\">
-          <div class=\"label\">Paper Trading</div>
+          <div class=\"label\">Mapping symboles -> groupe</div>
+          <table style=\"margin-top:8px\">
+            <thead>
+              <tr><th>Symbole</th><th>Groupe</th><th>Timeframe</th><th>Alloc</th><th>SL</th><th>TP</th></tr>
+            </thead>
+            <tbody>
+              ${symbolRows}
+            </tbody>
+          </table>
+        </div>
+
+        <div class=\"card\" style=\"margin-bottom:12px\">
+          <div class=\"label\">Paper Trading (fallback global)</div>
           <div class=\"cfg-grid\">
             <div class=\"cfg-item\"><div class=\"label\">Capital initial</div><div class=\"value\">${fmtUsd(c.initial_capital)}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Allocation/trade</div><div class=\"value\">${(c.trade_allocation * 100).toFixed(0)}%</div></div>
+            <div class=\"cfg-item\"><div class=\"label\">Allocation/trade fallback</div><div class=\"value\">${(c.trade_allocation * 100).toFixed(0)}%</div></div>
           </div>
         </div>
+
         <div class=\"card\" style=\"margin-bottom:12px\">
-          <div class=\"label\">Strategie</div>
-          <div class=\"cfg-title\">RSI</div>
-          <div class=\"cfg-grid\">
-            <div class=\"cfg-item\"><div class=\"label\">Periode</div><div class=\"value\">${c.rsi.period}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Survente</div><div class=\"value\">${c.rsi.oversold}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Surachat</div><div class=\"value\">${c.rsi.overbought}</div></div>
-          </div>
-          <div class=\"cfg-title\">MACD</div>
-          <div class=\"cfg-grid\">
-            <div class=\"cfg-item\"><div class=\"label\">Rapide</div><div class=\"value\">${c.macd.fast}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Lent</div><div class=\"value\">${c.macd.slow}</div></div>
-            <div class=\"cfg-item\"><div class=\"label\">Signal</div><div class=\"value\">${c.macd.signal}</div></div>
-          </div>
-        </div>
-        <div class=\"card\" style=\"margin-bottom:12px\">
-          <div class=\"label\">Gestion du risque ${stopsLbl}</div>
+          <div class=\"label\">Gestion du risque fallback ${stopsLbl}</div>
           <div class=\"cfg-grid\">
             <div class=\"cfg-item\"><div class=\"label\">Stop-Loss</div><div class=\"value neg\">${c.stops.stop_loss_pct}%</div></div>
             <div class=\"cfg-item\"><div class=\"label\">Take-Profit</div><div class=\"value pos\">+${c.stops.take_profit_pct}%</div></div>
           </div>
         </div>
+
         <div class=\"card\">
           <div class=\"label\">Frais &amp; Slippage</div>
           <div class=\"cfg-grid\">
