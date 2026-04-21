@@ -50,8 +50,9 @@ def _max_drawdown_pct(equity_curve: list[float]) -> float:
 
 def _backtest_symbol(symbol: str, timeframe: str, initial_capital: float, limit: int) -> BacktestResult:
     df = fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = compute_indicators(df)
+    df = compute_indicators(df, symbol=symbol)
     df.dropna(inplace=True)
+    symbol_cfg = config.get_symbol_config(symbol)
 
     cash = initial_capital
     position_qty = 0.0
@@ -78,12 +79,12 @@ def _backtest_symbol(symbol: str, timeframe: str, initial_capital: float, limit:
         macd_cross_up = (prev["macd"] < prev["macd_signal"]) and (curr["macd"] > curr["macd_signal"])
         macd_cross_down = (prev["macd"] > prev["macd_signal"]) and (curr["macd"] < curr["macd_signal"])
 
-        should_buy = curr["rsi"] < config.RSI_OVERSOLD and macd_cross_up
-        should_sell = curr["rsi"] > config.RSI_OVERBOUGHT and macd_cross_down
+        should_buy = curr["rsi"] < float(symbol_cfg["rsi_oversold"]) and macd_cross_up
+        should_sell = curr["rsi"] > float(symbol_cfg["rsi_overbought"]) and macd_cross_down
 
         # Buy with configured allocation, sell full position on SELL signal.
         if should_buy and cash > 1.0:
-            spend = cash * config.TRADE_ALLOCATION
+            spend = cash * float(symbol_cfg["trade_allocation"])
             if spend > 0:
                 qty = spend / price
                 position_qty += qty

@@ -9,19 +9,20 @@ import config
 Signal = Literal["BUY", "SELL", "HOLD"]
 
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def compute_indicators(df: pd.DataFrame, symbol: str | None = None) -> pd.DataFrame:
     """Ajoute les colonnes RSI et MACD au DataFrame OHLCV."""
     df = df.copy()
+    symbol_cfg = config.get_symbol_config(symbol) if symbol else config.DEFAULT_SYMBOL_STRATEGY
 
     # RSI
-    df["rsi"] = RSIIndicator(close=df["close"], window=config.RSI_PERIOD).rsi()
+    df["rsi"] = RSIIndicator(close=df["close"], window=int(symbol_cfg["rsi_period"])).rsi()
 
     # MACD
     macd_obj = MACD(
         close=df["close"],
-        window_fast=config.MACD_FAST,
-        window_slow=config.MACD_SLOW,
-        window_sign=config.MACD_SIGNAL,
+        window_fast=int(symbol_cfg["macd_fast"]),
+        window_slow=int(symbol_cfg["macd_slow"]),
+        window_sign=int(symbol_cfg["macd_signal"]),
     )
     df["macd"] = macd_obj.macd()
     df["macd_signal"] = macd_obj.macd_signal()
@@ -30,7 +31,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_signal(df: pd.DataFrame) -> Signal:
+def get_signal(df: pd.DataFrame, symbol: str | None = None) -> Signal:
     """
     Calcule le signal de trading sur les deux dernières bougies (crossover).
 
@@ -39,8 +40,9 @@ def get_signal(df: pd.DataFrame) -> Signal:
     - SELL : RSI > RSI_OVERBOUGHT ET MACD vient de croiser EN-DESSOUS de la ligne signal
     - HOLD : sinon
     """
-    df = compute_indicators(df)
+    df = compute_indicators(df, symbol=symbol)
     df.dropna(inplace=True)
+    symbol_cfg = config.get_symbol_config(symbol) if symbol else config.DEFAULT_SYMBOL_STRATEGY
 
     if len(df) < 2:
         return "HOLD"
@@ -55,8 +57,8 @@ def get_signal(df: pd.DataFrame) -> Signal:
     # Crossover baissier : MACD passe en dessous du signal
     macd_cross_down = (prev["macd"] > prev["macd_signal"]) and (last["macd"] < last["macd_signal"])
 
-    if rsi < config.RSI_OVERSOLD and macd_cross_up:
+    if rsi < float(symbol_cfg["rsi_oversold"]) and macd_cross_up:
         return "BUY"
-    if rsi > config.RSI_OVERBOUGHT and macd_cross_down:
+    if rsi > float(symbol_cfg["rsi_overbought"]) and macd_cross_down:
         return "SELL"
     return "HOLD"

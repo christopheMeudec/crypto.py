@@ -34,6 +34,8 @@ class PositionEntry:
     entry_timestamp: datetime
     entry_fee: float                           # Frais payés à l'achat
     entry_cost_basis: float                    # qty * entry_price + entry_fee
+    strategy_group: str = "default"
+    strategy_timeframe: str = config.TIMEFRAME
     
     stop_loss_price: float | None = None       # Calculé à l'entrée si SL actif
     take_profit_price: float | None = None     # Calculé à l'entrée si TP actif
@@ -67,6 +69,8 @@ class PositionEntry:
             "entry_quantity": self.entry_quantity,
             "entry_fee": self.entry_fee,
             "entry_cost_basis": self.entry_cost_basis,
+            "strategy_group": self.strategy_group,
+            "strategy_timeframe": self.strategy_timeframe,
             "stop_loss_price": self.stop_loss_price,
             "take_profit_price": self.take_profit_price,
             "entry_timestamp": self.entry_timestamp.isoformat(),
@@ -118,6 +122,7 @@ class PaperTrader:
     """
 
     def __init__(self, initial_capital: float = config.INITIAL_CAPITAL_USDT) -> None:
+        self.initial_capital: float = initial_capital
         self.usdt_balance: float = initial_capital
         self.entries: List[PositionEntry] = []      # Liste des positions (remplace dict positions)
         self.trades: List[Trade] = []
@@ -164,7 +169,8 @@ class PaperTrader:
         Calcule la quantité en tenant compte du slippage et des frais.
         Crée une PositionEntry avec stop-loss et take-profit si activés.
         """
-        spend = self.usdt_balance * config.TRADE_ALLOCATION
+        symbol_cfg = config.get_symbol_config(symbol)
+        spend = self.usdt_balance * float(symbol_cfg["trade_allocation"])
         if spend < 1.0:
             logger.warning("[%s] Solde USDT insuffisant pour acheter (%.2f USDT).", symbol, self.usdt_balance)
             return None
@@ -186,8 +192,8 @@ class PaperTrader:
         stop_loss_price = None
         take_profit_price = None
         if config.ENABLE_STOPS:
-            stop_loss_price = price * (1 + config.STOP_LOSS_PCT / 100)
-            take_profit_price = price * (1 + config.TAKE_PROFIT_PCT / 100)
+            stop_loss_price = price * (1 + float(symbol_cfg["stop_loss_pct"]) / 100)
+            take_profit_price = price * (1 + float(symbol_cfg["take_profit_pct"]) / 100)
         
         # Créer la position entry
         entry_cost_basis = quantity * price + entry_fee
@@ -202,6 +208,8 @@ class PaperTrader:
             entry_timestamp=now_ts,
             entry_fee=entry_fee,
             entry_cost_basis=entry_cost_basis,
+            strategy_group=str(symbol_cfg["group"]),
+            strategy_timeframe=str(symbol_cfg["timeframe"]),
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
             status="OPEN"
@@ -386,8 +394,8 @@ class PaperTrader:
         PnL = Valeur du portefeuille - Capital initial
         """
         total_value = self.portfolio_value(prices)
-        pnl = total_value - config.INITIAL_CAPITAL_USDT
-        pnl_pct = (pnl / config.INITIAL_CAPITAL_USDT) * 100 if config.INITIAL_CAPITAL_USDT > 0 else 0.0
+        pnl = total_value - self.initial_capital
+        pnl_pct = (pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0.0
         return total_value, pnl, pnl_pct
 
     def print_summary(self, prices: Dict[str, float]) -> None:
@@ -431,6 +439,8 @@ class PaperTrader:
                     "current_price": price,
                     "value": entry.entry_quantity * price,
                     "unrealized_pnl": unrealized_pnl,
+                    "strategy_group": entry.strategy_group,
+                    "strategy_timeframe": entry.strategy_timeframe,
                     "stop_loss_price": entry.stop_loss_price,
                     "take_profit_price": entry.take_profit_price,
                 }

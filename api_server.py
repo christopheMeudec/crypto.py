@@ -380,9 +380,15 @@ class MobileAPIServer:
                     self._send_json({"items": history})
                     return
                 if parsed.path == "/api/config":
+                    symbol_profiles = {
+                        symbol: config.get_symbol_config(symbol)
+                        for symbol in config.SYMBOLS
+                    }
                     self._send_json({
                         "symbols": config.SYMBOLS,
                         "timeframe": config.TIMEFRAME,
+                        "strategy_groups": config.STRATEGY_GROUPS,
+                        "symbol_profiles": symbol_profiles,
                         "ohlcv_limit": config.OHLCV_LIMIT,
                         "initial_capital": config.INITIAL_CAPITAL_USDT,
                         "trade_allocation": config.TRADE_ALLOCATION,

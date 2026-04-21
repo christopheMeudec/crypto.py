@@ -60,6 +60,11 @@ def main():
         action="store_true",
         help="Run backtest on all symbols in config"
     )
+    parser.add_argument(
+        "--grouped-timeframes",
+        action="store_true",
+        help="Use timeframe from strategy group for each symbol"
+    )
     
     args = parser.parse_args()
     
@@ -77,10 +82,20 @@ def main():
     
     for symbol in symbols:
         try:
+            symbol_cfg = config.get_symbol_config(symbol)
+            timeframe = config.get_symbol_timeframe(symbol) if args.grouped_timeframes else args.timeframe
             logger.info("Backtesting %s...", symbol)
+            logger.info(
+                "Profile=%s | Timeframe=%s | Allocation=%.2f%% | SL=%.2f%% | TP=%.2f%%",
+                symbol_cfg["group"],
+                timeframe,
+                float(symbol_cfg["trade_allocation"]) * 100,
+                float(symbol_cfg["stop_loss_pct"]),
+                float(symbol_cfg["take_profit_pct"]),
+            )
             metrics = run_backtest(
                 symbol=symbol,
-                timeframe=args.timeframe,
+                timeframe=timeframe,
                 days_back=args.days,
                 initial_capital=args.capital,
             )

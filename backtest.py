@@ -283,7 +283,7 @@ class BacktestRunner:
             closed = self.trader._auto_close_entries(self.symbol, current_price)
             
             # 2. Generate signal
-            signal = get_signal(df.iloc[:i+1])  # Pass data up to current candle
+            signal = get_signal(df.iloc[: i + 1], symbol=self.symbol)
             
             # 3. Execute signal
             if signal == "BUY":
@@ -531,7 +531,7 @@ def print_backtest_report(metrics: BacktestMetrics) -> None:
 
 def run_backtest(
     symbol: str,
-    timeframe: str = "15m",
+    timeframe: str | None = None,
     days_back: int = 365,
     initial_capital: float = 100.0,
 ) -> BacktestMetrics:
@@ -547,12 +547,14 @@ def run_backtest(
     Returns:
         BacktestMetrics with results
     """
+    resolved_timeframe = timeframe or config.get_symbol_timeframe(symbol)
+
     logger.info("Fetching historical data...")
-    df = fetch_ohlcv_long(symbol, timeframe=timeframe, days_back=days_back)
+    df = fetch_ohlcv_long(symbol, timeframe=resolved_timeframe, days_back=days_back)
     
     if df.empty:
         logger.error("Failed to fetch data")
-        return BacktestMetrics(symbol=symbol, timeframe=timeframe, start_date="", end_date="", 
+        return BacktestMetrics(symbol=symbol, timeframe=resolved_timeframe, start_date="", end_date="", 
                                initial_capital=initial_capital, final_value=initial_capital,
                                realized_pnl=0.0, realized_pnl_pct=0.0, total_trades=0,
                                buy_trades=0, sell_trades=0, winning_trades=0, losing_trades=0,
@@ -564,11 +566,11 @@ def run_backtest(
     
     logger.info("Computing indicators...")
     from strategy import compute_indicators
-    df = compute_indicators(df)
+    df = compute_indicators(df, symbol=symbol)
     df.dropna(inplace=True)
     
     logger.info("Running backtest...")
-    runner = BacktestRunner(symbol=symbol, timeframe=timeframe, initial_capital=initial_capital)
+    runner = BacktestRunner(symbol=symbol, timeframe=resolved_timeframe, initial_capital=initial_capital)
     metrics = runner.run(df)
     
     return metrics

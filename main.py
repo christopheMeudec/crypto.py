@@ -38,9 +38,26 @@ def run() -> None:
     notifier = TelegramNotifier.from_config()
     latest_prices: dict[str, float] = {}
     state_lock = threading.Lock()
+    symbol_profiles = {symbol: config.get_symbol_config(symbol) for symbol in config.SYMBOLS}
+    symbol_intervals_seconds = {
+        symbol: config.timeframe_to_seconds(str(profile["timeframe"]))
+        for symbol, profile in symbol_profiles.items()
+    }
+    next_run_at = {symbol: time.time() for symbol in config.SYMBOLS}
 
     logger.info("Bot démarré | Capital initial : $%.2f USDT", config.INITIAL_CAPITAL_USDT)
-    logger.info("Paires : %s | Timeframe : %s", config.SYMBOLS, config.TIMEFRAME)
+    logger.info("Paires : %s", config.SYMBOLS)
+    for symbol in config.SYMBOLS:
+        profile = symbol_profiles[symbol]
+        logger.info(
+            "[%s] groupe=%s | timeframe=%s | alloc=%.2f%% | SL=%.2f%% | TP=%.2f%%",
+            symbol,
+            profile["group"],
+            profile["timeframe"],
+            float(profile["trade_allocation"]) * 100,
+            float(profile["stop_loss_pct"]),
+            float(profile["take_profit_pct"]),
+        )
 
     if config.API_ENABLED:
         def state_provider() -> dict:
@@ -100,36 +117,51 @@ def run() -> None:
             if cmd == "symbols":
                 lines = ["\U0001f4ca Symboles trades"]
                 for s in config.SYMBOLS:
-                    lines.append(f"  - {s}")
-                lines.append(f"Timeframe: {config.TIMEFRAME} | Intervalle: {config.LOOP_INTERVAL_SECONDS}s")
+                    profile = symbol_profiles[s]
+                    lines.append(f"  - {s} | {profile['group']} | {profile['timeframe']}")
                 return "\n".join(lines)
             if cmd == "config":
                 stops = "Actif" if config.ENABLE_STOPS else "Inactif"
-                return (
+                lines = [
                     "\u2699\ufe0f Configuration\n"
-                    f"Capital: ${config.INITIAL_CAPITAL_USDT:,.0f} USDT | Alloc: {config.TRADE_ALLOCATION * 100:.0f}%\n"
-                    f"RSI({config.RSI_PERIOD}): survente={config.RSI_OVERSOLD} surachat={config.RSI_OVERBOUGHT}\n"
-                    f"MACD: {config.MACD_FAST}/{config.MACD_SLOW}/{config.MACD_SIGNAL}\n"
-                    f"SL: {config.STOP_LOSS_PCT}% | TP: +{config.TAKE_PROFIT_PCT}% ({stops})\n"
-                    f"Frais: {config.TAKER_FEE_PCT}% | Slippage: {config.SLIPPAGE_PCT}%"
-                )
+                    f"Capital: ${config.INITIAL_CAPITAL_USDT:,.0f} USDT\n"
+                    f"Frais: {config.TAKER_FEE_PCT}% | Slippage: {config.SLIPPAGE_PCT}%\n"
+                    f"Stops globaux: {stops}"
+                ]
+                for group_name, group_cfg in config.STRATEGY_GROUPS.items():
+                    lines.append(
+                        f"\n- {group_name}: tf={group_cfg['timeframe']} | alloc={float(group_cfg['trade_allocation']) * 100:.0f}% "
+                        f"| RSI={group_cfg['rsi_oversold']}/{group_cfg['rsi_overbought']} "
+                        f"| MACD={group_cfg['macd_fast']}/{group_cfg['macd_slow']}/{group_cfg['macd_signal']} "
+                        f"| SL={group_cfg['stop_loss_pct']}% TP=+{group_cfg['take_profit_pct']}%"
+                    )
+                return "\n".join(lines)
             return "Commandes: /stats, /positions, /trades [N], /symbols, /config"
 
         notifier.start_command_listener(command_handler)
 
     if notifier.enabled:
         notifier.send_message(
-            f"Bot started\nPairs: {', '.join(config.SYMBOLS)}\nTimeframe: {config.TIMEFRAME}\nCapital: ${config.INITIAL_CAPITAL_USDT:,.2f}"
+            f"Bot started\nPairs: {', '.join(config.SYMBOLS)}\nProfiles: majors={config.STRATEGY_GROUPS['majors']['timeframe']}, alts={config.STRATEGY_GROUPS['alts']['timeframe']}\nCapital: ${config.INITIAL_CAPITAL_USDT:,.2f}"
         )
     else:
         logger.info("Telegram desactive (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID manquants).")
 
     while True:
+        cycle_started_at = time.time()
         prices: dict[str, float] = {}
+        processed_symbols: list[str] = []
 
         for symbol in config.SYMBOLS:
+            if cycle_started_at < next_run_at[symbol]:
+                continue
+
+            processed_symbols.append(symbol)
+            profile = symbol_profiles[symbol]
+            timeframe = str(profile["timeframe"])
+
             try:
-                df = fetch_ohlcv(symbol, config.TIMEFRAME)
+                df = fetch_ohlcv(symbol, timeframe)
                 current_price = float(df["close"].iloc[-1])
                 prices[symbol] = current_price
                 with state_lock:
@@ -140,8 +172,8 @@ def run() -> None:
                 if closed_entries:
                     logger.info("[%s] %d position(s) fermée(s) par SL/TP", symbol, len(closed_entries))
 
-                signal = get_signal(df)
-                logger.info("[%s] Prix : $%.2f  |  Signal : %s", symbol, current_price, signal)
+                signal = get_signal(df, symbol=symbol)
+                logger.info("[%s][%s] Prix : $%.2f  |  Signal : %s", symbol, timeframe, current_price, signal)
 
                 entry_result = None
                 if signal == "BUY":
@@ -182,26 +214,32 @@ def run() -> None:
 
             except Exception as exc:
                 logger.error("[%s] Erreur lors du traitement : %s", symbol, exc)
+            finally:
+                next_run_at[symbol] = cycle_started_at + symbol_intervals_seconds[symbol]
 
-        # Résumé du portefeuille après chaque itération
-        with state_lock:
-            current_prices = dict(latest_prices)
-        trader.print_summary(current_prices)
-        trader.record_snapshot(current_prices)
+        if processed_symbols:
+            # Résumé du portefeuille après chaque cycle utile
+            with state_lock:
+                current_prices = dict(latest_prices)
+            trader.print_summary(current_prices)
+            trader.record_snapshot(current_prices)
 
-        if notifier.enabled and config.TELEGRAM_SEND_LOOP_SUMMARY:
-            total, pnl, pnl_pct = trader.pnl_metrics(current_prices)
-            notifier.send_loop_summary(
-                prices=current_prices,
-                total_value=total,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                usdt_balance=trader.usdt_balance,
-                positions=trader.get_positions_by_symbol(),
-            )
+            if notifier.enabled and config.TELEGRAM_SEND_LOOP_SUMMARY:
+                total, pnl, pnl_pct = trader.pnl_metrics(current_prices)
+                notifier.send_loop_summary(
+                    prices=current_prices,
+                    total_value=total,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    usdt_balance=trader.usdt_balance,
+                    positions=trader.get_positions_by_symbol(),
+                )
 
-        logger.info("Prochaine itération dans %d secondes…", config.LOOP_INTERVAL_SECONDS)
-        time.sleep(config.LOOP_INTERVAL_SECONDS)
+        next_due_at = min(next_run_at.values()) if next_run_at else (time.time() + 1)
+        sleep_seconds = max(1, min(30, int(next_due_at - time.time())))
+        if processed_symbols:
+            logger.info("Cycle traité (%s). Prochaine vérification dans %d secondes.", ", ".join(processed_symbols), sleep_seconds)
+        time.sleep(sleep_seconds)
 
 
 def run_timeframe_optimization(history_limit: int) -> None:
