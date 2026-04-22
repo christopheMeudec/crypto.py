@@ -121,13 +121,20 @@ class PaperTrader:
     Les ordres sont exécutés immédiatement au prix de marché transmis.
     """
 
-    def __init__(self, initial_capital: float = config.INITIAL_CAPITAL_USDT) -> None:
+    def __init__(
+        self,
+        initial_capital: float = config.INITIAL_CAPITAL_USDT,
+        data_dir: str | Path | None = None,
+        persist: bool = True,
+    ) -> None:
         self.initial_capital: float = initial_capital
         self.usdt_balance: float = initial_capital
         self.entries: List[PositionEntry] = []      # Liste des positions (remplace dict positions)
         self.trades: List[Trade] = []
-        self.data_dir = Path(config.DATA_DIR)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.persist = persist
+        self.data_dir = Path(data_dir) if data_dir else Path(config.DATA_DIR)
+        if self.persist:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
         self.trades_file = self.data_dir / "trades.json"
         self.snapshots_file = self.data_dir / "portfolio_snapshots.json"
 
@@ -457,6 +464,8 @@ class PaperTrader:
         }
 
     def record_snapshot(self, prices: Dict[str, float]) -> None:
+        if not self.persist:
+            return
         self._append_json_record(
             self.snapshots_file,
             self.create_snapshot(prices),
@@ -479,6 +488,8 @@ class PaperTrader:
         return records[-max(1, limit):]
 
     def _persist_trade(self, trade: Trade) -> None:
+        if not self.persist:
+            return
         self._append_json_record(
             self.trades_file,
             trade.to_dict(),

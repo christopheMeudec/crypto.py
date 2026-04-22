@@ -253,7 +253,11 @@ class BacktestRunner:
         self.symbol = symbol
         self.timeframe = timeframe
         self.initial_capital = initial_capital
-        self.trader = PaperTrader(initial_capital=initial_capital)
+        self.trader = PaperTrader(
+            initial_capital=initial_capital,
+            data_dir=config.BACKTEST_DATA_DIR,
+            persist=config.BACKTEST_PERSIST_TRADES,
+        )
     
     def run(self, df: pd.DataFrame) -> BacktestMetrics:
         """

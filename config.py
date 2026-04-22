@@ -163,6 +163,8 @@ SYMBOLS = _flatten_symbols_from_groups()
 
 # --- Persistance locale ---
 DATA_DIR = os.getenv("DATA_DIR", "data")
+BACKTEST_DATA_DIR = os.getenv("BACKTEST_DATA_DIR", os.path.join(DATA_DIR, "backtest"))
+BACKTEST_PERSIST_TRADES = os.getenv("BACKTEST_PERSIST_TRADES", "false").lower() == "true"
 MAX_STORED_TRADES = int(os.getenv("MAX_STORED_TRADES", "2000"))
 MAX_STORED_SNAPSHOTS = int(os.getenv("MAX_STORED_SNAPSHOTS", "3000"))
 

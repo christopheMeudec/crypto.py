@@ -15,7 +15,7 @@ from api_server import start_server_in_thread
 from data_fetcher import fetch_ohlcv
 from optimizer import optimize_timeframes
 from paper_trader import PaperTrader
-from strategy import get_signal
+from strategy import get_signal_with_reason
 from telegram_notifier import TelegramNotifier
 
 # ---------------------------------------------------------------------------
@@ -37,6 +37,7 @@ def run() -> None:
     trader = PaperTrader(initial_capital=config.INITIAL_CAPITAL_USDT)
     notifier = TelegramNotifier.from_config()
     latest_prices: dict[str, float] = {}
+    latest_signal_reasons: dict[str, str] = {}
     state_lock = threading.Lock()
     symbol_profiles = {symbol: config.get_symbol_config(symbol) for symbol in config.SYMBOLS}
     symbol_intervals_seconds = {
@@ -69,6 +70,7 @@ def run() -> None:
                     "positions": snapshot["positions"],
                     "trades": trader.get_recent_trades(limit=200),
                     "history": trader.get_history(limit=1000),
+                    "signal_diagnostics": dict(latest_signal_reasons),
                 }
 
         start_server_in_thread(state_provider)
@@ -136,7 +138,16 @@ def run() -> None:
                         f"| SL={group_cfg['stop_loss_pct']}% TP=+{group_cfg['take_profit_pct']}%"
                     )
                 return "\n".join(lines)
-            return "Commandes: /stats, /positions, /trades [N], /symbols, /config"
+            if cmd in {"diagnostic", "diag"}:
+                if not latest_signal_reasons:
+                    return "Diagnostic indisponible: aucun cycle encore traite."
+                lines = ["Diagnostic signaux"]
+                for s in config.SYMBOLS:
+                    timeframe = str(symbol_profiles[s]["timeframe"])
+                    reason = latest_signal_reasons.get(s, "Aucun diagnostic pour ce symbole")
+                    lines.append(f"- {s} [{timeframe}] | {reason}")
+                return "\n".join(lines)
+            return "Commandes: /stats, /positions, /trades [N], /symbols, /config, /diagnostic"
 
         notifier.start_command_listener(command_handler)
 
@@ -172,8 +183,17 @@ def run() -> None:
                 if closed_entries:
                     logger.info("[%s] %d position(s) fermée(s) par SL/TP", symbol, len(closed_entries))
 
-                signal = get_signal(df, symbol=symbol)
-                logger.info("[%s][%s] Prix : $%.2f  |  Signal : %s", symbol, timeframe, current_price, signal)
+                signal, signal_reason = get_signal_with_reason(df, symbol=symbol)
+                with state_lock:
+                    latest_signal_reasons[symbol] = signal_reason
+                logger.info(
+                    "[%s][%s] Prix : $%.2f  |  Signal : %s | %s",
+                    symbol,
+                    timeframe,
+                    current_price,
+                    signal,
+                    signal_reason,
+                )
 
                 entry_result = None
                 if signal == "BUY":
