@@ -54,10 +54,26 @@ def get_signal_with_reason(df: pd.DataFrame, symbol: str | None = None) -> tuple
 
     rsi = float(last["rsi"])
 
-    # Crossover haussier : MACD passe au-dessus du signal
+    # Crossover haussier : MACD passe au-dessus du signal (bougie courante)
     macd_cross_up = (prev["macd"] < prev["macd_signal"]) and (last["macd"] > last["macd_signal"])
-    # Crossover baissier : MACD passe en dessous du signal
+    # Crossover baissier : MACD passe en dessous du signal (bougie courante)
     macd_cross_down = (prev["macd"] > prev["macd_signal"]) and (last["macd"] < last["macd_signal"])
+
+    # Extension : accepter un crossover survenu il y a 1 bougie si le momentum est confirmé
+    if len(df) >= 3:
+        prev2 = df.iloc[-3]
+        macd_cross_up = macd_cross_up or (
+            (prev2["macd"] < prev2["macd_signal"])
+            and (prev["macd"] > prev["macd_signal"])
+            and (last["macd"] > last["macd_signal"])
+            and (float(last["macd_hist"]) >= float(prev["macd_hist"]))  # momentum toujours positif
+        )
+        macd_cross_down = macd_cross_down or (
+            (prev2["macd"] > prev2["macd_signal"])
+            and (prev["macd"] < prev["macd_signal"])
+            and (last["macd"] < last["macd_signal"])
+            and (float(last["macd_hist"]) <= float(prev["macd_hist"]))  # momentum toujours négatif
+        )
 
     buy_ready = (rsi < oversold) and macd_cross_up
     sell_ready = (rsi > overbought) and macd_cross_down

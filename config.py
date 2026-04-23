@@ -28,8 +28,8 @@ TRADE_ALLOCATION = 0.20           # fraction du capital par trade (10%)
 
 # --- Stratégie RSI ---
 RSI_PERIOD = 14
-RSI_OVERSOLD = 35         # signal BUY en dessous de ce seuil
-RSI_OVERBOUGHT = 65       # signal SELL au-dessus de ce seuil
+RSI_OVERSOLD = 38         # signal BUY en dessous de ce seuil
+RSI_OVERBOUGHT = 62       # signal SELL au-dessus de ce seuil
 
 # --- Stratégie MACD ---
 MACD_FAST = 8
@@ -76,10 +76,10 @@ DEFAULT_SYMBOL_STRATEGY = {
 STRATEGY_GROUPS = {
 	"majors": {
 		"symbols": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT"],
-		"timeframe": "1h",
+		"timeframe": "30m",
 		"rsi_period": 14,
-		"rsi_oversold": 37,
-		"rsi_overbought": 66,
+		"rsi_oversold": 40,
+		"rsi_overbought": 63,
 		"macd_fast": 8,
 		"macd_slow": 26,
 		"macd_signal": 9,
@@ -91,8 +91,8 @@ STRATEGY_GROUPS = {
 		"symbols": ["ADA/USDT", "XRP/USDT", "DOGE/USDT", "POL/USDT", "LINK/USDT", "AVAX/USDT"],
 		"timeframe": "30m",
 		"rsi_period": 14,
-		"rsi_oversold": 33,
-		"rsi_overbought": 63,
+		"rsi_oversold": 38,
+		"rsi_overbought": 60,
 		"macd_fast": 8,
 		"macd_slow": 26,
 		"macd_signal": 9,
