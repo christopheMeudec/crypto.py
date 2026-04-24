@@ -146,20 +146,53 @@ def fetch_ohlcv_long(
         batch_size
     )
     
+    timeframe_ms_map = {
+        "1m": 60_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "30m": 1_800_000,
+        "1h": 3_600_000,
+        "2h": 7_200_000,
+        "4h": 14_400_000,
+        "1d": 86_400_000,
+    }
+    timeframe_ms = timeframe_ms_map.get(timeframe, 900_000)
+
+    end_ms = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+    since_ms = end_ms - days_back * 24 * 60 * 60 * 1000
+
     all_data = []
+    fetched_candles = 0
     
     for batch_idx in range(num_batches):
         try:
             # Fetch batch
-            batch_limit = min(batch_size, total_candles_needed - batch_idx * batch_size)
-            df_batch = fetch_ohlcv(symbol, timeframe=timeframe, limit=batch_limit)
+            remaining = total_candles_needed - fetched_candles
+            if remaining <= 0:
+                break
+
+            batch_limit = min(batch_size, remaining)
+            df_batch = fetch_ohlcv(symbol, timeframe=timeframe, limit=batch_limit, since=since_ms)
             
             if df_batch.empty:
                 logger.warning("Empty batch %d, stopping.", batch_idx)
                 break
             
             all_data.append(df_batch)
+            fetched_candles += len(df_batch)
             logger.debug("Batch %d/%d: %d candles", batch_idx + 1, num_batches, len(df_batch))
+
+            # Move window forward to avoid repeatedly fetching the same latest candles.
+            last_ts_ms = int(df_batch.index[-1].timestamp() * 1000)
+            next_since_ms = last_ts_ms + timeframe_ms
+            if next_since_ms <= since_ms:
+                logger.warning("Pagination stalled at batch %d, stopping.", batch_idx)
+                break
+            since_ms = next_since_ms
+
+            if len(df_batch) < batch_limit:
+                logger.info("Reached exchange history limit at batch %d.", batch_idx + 1)
+                break
             
             # Respect rate limits (wait 0.5s between requests)
             if batch_idx < num_batches - 1:
@@ -390,9 +423,9 @@ class BacktestRunner:
                 max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
                 largest_loss = min(largest_loss, pnl)
         
-        # Win rate
-        sell_trades_count = sell_trades if sell_trades > 0 else 1
-        win_rate = (winning_trades / sell_trades_count * 100.0) if sell_trades_count > 0 else 0.0
+        # Win rate must be computed from closed trades only.
+        closed_trades_count = winning_trades + losing_trades
+        win_rate = (winning_trades / closed_trades_count * 100.0) if closed_trades_count > 0 else 0.0
         
         # Profit factor
         sum_wins = sum(p for p in trade_pnls if p > 0)

@@ -10,12 +10,17 @@ _exchange = ccxt.binance({
 })
 
 
-def fetch_ohlcv(symbol: str, timeframe: str = config.TIMEFRAME, limit: int = config.OHLCV_LIMIT) -> pd.DataFrame:
+def fetch_ohlcv(
+    symbol: str,
+    timeframe: str = config.TIMEFRAME,
+    limit: int = config.OHLCV_LIMIT,
+    since: int | None = None,
+) -> pd.DataFrame:
     """
     Récupère les bougies OHLCV depuis Binance et retourne un DataFrame pandas.
     Colonnes : timestamp, open, high, low, close, volume
     """
-    raw = _exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    raw = _exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit, since=since)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
