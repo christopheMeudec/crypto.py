@@ -84,6 +84,36 @@ class PositionEntry:
             "status": self.status,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "PositionEntry":
+        """Reconstruit une PositionEntry depuis un dict JSON."""
+        def _opt_float(v: object) -> float | None:
+            return float(v) if v is not None else None  # type: ignore[arg-type]
+
+        def _opt_dt(v: object) -> datetime | None:
+            return datetime.fromisoformat(str(v)) if v is not None else None
+
+        return cls(
+            entry_id=str(data["entry_id"]),
+            symbol=str(data["symbol"]),
+            entry_price=float(data["entry_price"]),  # type: ignore[arg-type]
+            entry_quantity=float(data["entry_quantity"]),  # type: ignore[arg-type]
+            entry_timestamp=datetime.fromisoformat(str(data["entry_timestamp"])),
+            entry_fee=float(data["entry_fee"]),  # type: ignore[arg-type]
+            entry_cost_basis=float(data["entry_cost_basis"]),  # type: ignore[arg-type]
+            strategy_group=str(data.get("strategy_group", "default")),
+            strategy_timeframe=str(data.get("strategy_timeframe", config.TIMEFRAME)),
+            stop_loss_price=_opt_float(data.get("stop_loss_price")),
+            take_profit_price=_opt_float(data.get("take_profit_price")),
+            exit_price=_opt_float(data.get("exit_price")),
+            exit_quantity=_opt_float(data.get("exit_quantity")),
+            exit_fee=_opt_float(data.get("exit_fee")),
+            exit_timestamp=_opt_dt(data.get("exit_timestamp")),
+            realized_pnl=_opt_float(data.get("realized_pnl")),
+            realized_pnl_pct=_opt_float(data.get("realized_pnl_pct")),
+            status=str(data.get("status", "OPEN")),
+        )
+
 
 @dataclass
 class Trade:
@@ -138,8 +168,11 @@ class PaperTrader:
             self.data_dir.mkdir(parents=True, exist_ok=True)
         self.trades_file = self.data_dir / "trades.json"
         self.snapshots_file = self.data_dir / "portfolio_snapshots.json"
+        self.state_file = self.data_dir / "state.json"
         # RLock (réentrant) : protège usdt_balance et entries contre les accès concurrents
         self._lock = threading.RLock()
+        if self.persist:
+            self._load_state()
 
     # ------------------------------------------------------------------
     # Helpers pour accéder aux positions
@@ -249,7 +282,7 @@ class PaperTrader:
                 f"${take_profit_price:,.2f}" if take_profit_price else "N/A",
                 self.usdt_balance
             )
-
+            self.save_state()
             return entry
 
     def sell(self, symbol: str, price: float, entry_id: str | None = None) -> PositionEntry | None:
@@ -319,7 +352,7 @@ class PaperTrader:
                 exit_fee,
                 self.usdt_balance
             )
-
+            self.save_state()
             return entry
 
     def _auto_close_entries(self, symbol: str, price: float) -> List[PositionEntry]:
@@ -348,6 +381,8 @@ class PaperTrader:
                     self._close_entry(entry, price, close_reason)
                     closed.append(entry)
 
+            if closed:
+                self.save_state()
             return closed
 
     def _close_entry(self, entry: PositionEntry, price: float, status: str) -> None:
@@ -492,6 +527,52 @@ class PaperTrader:
     def get_history(self, limit: int = 120) -> List[Dict[str, object]]:
         records = self._read_json_array(self.snapshots_file)
         return records[-max(1, limit):]
+
+    # ------------------------------------------------------------------
+    # Persistance de l'état entre redémarrages
+    # ------------------------------------------------------------------
+
+    def save_state(self) -> None:
+        """Persiste le solde USDT et les positions ouvertes pour reprise après redémarrage."""
+        if not self.persist:
+            return
+        state = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "usdt_balance": self.usdt_balance,
+            "open_entries": [e.to_dict() for e in self.entries if e.status == "OPEN"],
+        }
+        try:
+            self.state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Impossible d'écrire l'état : %s", exc)
+
+    def _load_state(self) -> None:
+        """Restaure le solde et les positions ouvertes depuis le fichier d'état."""
+        if not self.state_file.exists():
+            return
+        try:
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("État sauvegardé illisible (%s) — démarrage à zéro.", exc)
+            return
+
+        raw_entries: list = data.get("open_entries", [])
+        try:
+            restored = [PositionEntry.from_dict(e) for e in raw_entries]
+        except Exception as exc:
+            logger.warning("Erreur lors de la restauration des positions (%s) — démarrage à zéro.", exc)
+            return
+
+        self.usdt_balance = float(data.get("usdt_balance", self.usdt_balance))
+        self.entries = restored
+        logger.info(
+            "État restauré (sauvegardé le %s) : USDT=%.2f, %d position(s) ouverte(s).",
+            data.get("saved_at", "?"),
+            self.usdt_balance,
+            len(restored),
+        )
+        for entry in restored:
+            logger.info("  Restaurée : %s", entry)
 
     def _persist_trade(self, trade: Trade) -> None:
         if not self.persist:
