@@ -10,6 +10,9 @@ import logging
 import signal
 import threading
 import time
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import config
 from api_server import start_server_in_thread
@@ -22,11 +25,31 @@ from telegram_notifier import TelegramNotifier
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+
+def _setup_logging() -> None:
+    """Console + fichier rotatif (10 Mo × 5 fichiers) dans LOG_DIR."""
+    log_dir = Path(config.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    file_handler = RotatingFileHandler(
+        log_dir / "bot.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -65,7 +88,16 @@ def run() -> None:
     }
     next_run_at = {symbol: time.time() for symbol in config.SYMBOLS}
 
+    # --- Circuit breaker journalier ---
+    _day: str = ""
+    _day_ref_value: float = config.INITIAL_CAPITAL_USDT
+    _circuit_breaker: bool = False
+
     logger.info("Bot démarré | Capital initial : $%.2f USDT", config.INITIAL_CAPITAL_USDT)
+    logger.info(
+        "Limites portefeuille : max %d positions | circuit breaker à %.1f%%",
+        config.MAX_OPEN_POSITIONS, config.DAILY_DRAWDOWN_LIMIT_PCT,
+    )
     logger.info("Paires : %s", config.SYMBOLS)
     for symbol in config.SYMBOLS:
         profile = symbol_profiles[symbol]
@@ -182,6 +214,43 @@ def run() -> None:
         prices: dict[str, float] = {}
         processed_symbols: list[str] = []
 
+        # ------------------------------------------------------------------
+        # Réinitialisation journalière du circuit breaker
+        # ------------------------------------------------------------------
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if _today != _day:
+            with state_lock:
+                _ref_prices = dict(latest_prices)
+            if _ref_prices:
+                _day_ref_value = trader.portfolio_value(_ref_prices)
+            if _day:  # pas la première itération
+                _circuit_breaker = False
+                logger.info(
+                    "Nouveau jour (%s) — circuit breaker réinitialisé. Référence : $%.2f",
+                    _today, _day_ref_value,
+                )
+            _day = _today
+
+        # Vérifier le drawdown journalier
+        if not _circuit_breaker and latest_prices and _day_ref_value > 0:
+            with state_lock:
+                _cb_prices = dict(latest_prices)
+            _cb_value = trader.portfolio_value(_cb_prices)
+            _daily_dd_pct = (_cb_value - _day_ref_value) / _day_ref_value * 100
+            if _daily_dd_pct <= config.DAILY_DRAWDOWN_LIMIT_PCT:
+                _circuit_breaker = True
+                logger.warning(
+                    "Circuit breaker activé : drawdown journalier %.2f%% <= %.2f%% — achats suspendus.",
+                    _daily_dd_pct, config.DAILY_DRAWDOWN_LIMIT_PCT,
+                )
+                if notifier.enabled:
+                    notifier.send_message(
+                        f"⚠️ Circuit breaker activé\n"
+                        f"Drawdown journalier : {_daily_dd_pct:+.2f}%\n"
+                        f"Seuil : {config.DAILY_DRAWDOWN_LIMIT_PCT}%\n"
+                        f"Achats suspendus jusqu'au prochain jour."
+                    )
+
         for symbol in config.SYMBOLS:
             if cycle_started_at < next_run_at[symbol]:
                 continue
@@ -216,7 +285,16 @@ def run() -> None:
 
                 entry_result = None
                 if signal == "BUY":
-                    entry_result = trader.buy(symbol, current_price)
+                    n_open = len(trader.get_open_entries_all())
+                    if _circuit_breaker:
+                        logger.info("[%s] BUY ignoré — circuit breaker actif.", symbol)
+                    elif n_open >= config.MAX_OPEN_POSITIONS:
+                        logger.info(
+                            "[%s] BUY ignoré — limite de %d positions atteinte (%d ouvertes).",
+                            symbol, config.MAX_OPEN_POSITIONS, n_open,
+                        )
+                    else:
+                        entry_result = trader.buy(symbol, current_price)
                 elif signal == "SELL":
                     # Vérifier s'il y a des positions ouvertes à vendre
                     if trader.get_total_quantity(symbol) > 0:

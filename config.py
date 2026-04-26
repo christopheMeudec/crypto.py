@@ -48,6 +48,10 @@ SLIPPAGE_PCT = 0.05               # Slippage moyen sur les ordres (0.05%)
 # --- Boucle principale ---
 LOOP_INTERVAL_SECONDS = 1800  # une itération toutes les 30 minutes (aligné sur timeframe 30m)
 
+# --- Limites de risque portefeuille ---
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
+DAILY_DRAWDOWN_LIMIT_PCT = float(os.getenv("DAILY_DRAWDOWN_LIMIT_PCT", "-5.0"))
+
 # --- Groupes de stratégie (majors vs alts volatiles) ---
 SUPPORTED_TIMEFRAMES_SECONDS = {
 	"1m": 60,
@@ -163,6 +167,7 @@ SYMBOLS = _flatten_symbols_from_groups()
 
 # --- Persistance locale ---
 DATA_DIR = os.getenv("DATA_DIR", "data")
+LOG_DIR = os.getenv("LOG_DIR", "logs")
 BACKTEST_DATA_DIR = os.getenv("BACKTEST_DATA_DIR", os.path.join(DATA_DIR, "backtest"))
 BACKTEST_PERSIST_TRADES = os.getenv("BACKTEST_PERSIST_TRADES", "false").lower() == "true"
 MAX_STORED_TRADES = int(os.getenv("MAX_STORED_TRADES", "2000"))
