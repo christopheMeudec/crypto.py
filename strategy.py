@@ -3,6 +3,7 @@ from typing import Literal
 import pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
+from ta.volatility import AverageTrueRange
 
 import config
 
@@ -93,3 +94,18 @@ def get_signal_with_reason(df: pd.DataFrame, symbol: str | None = None) -> tuple
 def get_signal(df: pd.DataFrame, symbol: str | None = None) -> Signal:
     signal, _ = get_signal_with_reason(df, symbol=symbol)
     return signal
+
+
+def compute_atr(df: pd.DataFrame, period: int | None = None) -> float | None:
+    """Retourne la valeur ATR sur la dernière bougie, ou None si insuffisant."""
+    if period is None:
+        period = config.ATR_PERIOD
+    if len(df) < period + 1:
+        return None
+    try:
+        val = AverageTrueRange(
+            high=df["high"], low=df["low"], close=df["close"], window=period
+        ).average_true_range().iloc[-1]
+        return float(val) if pd.notna(val) and val > 0 else None
+    except Exception:
+        return None

@@ -21,7 +21,7 @@ import pandas as pd
 import config
 from data_fetcher import fetch_ohlcv
 from paper_trader import PaperTrader
-from strategy import get_signal
+from strategy import compute_atr, get_signal
 
 logger = logging.getLogger(__name__)
 
@@ -323,23 +323,23 @@ class BacktestRunner:
         
         equity_curve = [self.initial_capital]
         buy_prices = {}  # symbol -> [prices]
-        
+
         logger.info("Starting backtest for %s | %s candles", self.symbol, len(df))
-        
+
         for i in range(1, len(df)):
-            prev_row = df.iloc[i - 1]
             curr_row = df.iloc[i]
             current_price = float(curr_row["close"])
-            
-            # 1. Auto-close SL/TP FIRST
+
+            # 1. Auto-close SL/TP/TS FIRST
             closed = self.trader._auto_close_entries(self.symbol, current_price)
-            
+
             # 2. Generate signal
             signal = get_signal(df.iloc[: i + 1], symbol=self.symbol)
-            
+
             # 3. Execute signal
             if signal == "BUY":
-                entry = self.trader.buy(self.symbol, current_price)
+                atr_val = compute_atr(df.iloc[: i + 1]) if config.USE_ATR_STOPS else None
+                entry = self.trader.buy(self.symbol, current_price, atr=atr_val)
                 if entry:
                     if self.symbol not in buy_prices:
                         buy_prices[self.symbol] = []
@@ -624,5 +624,156 @@ def run_backtest(
     logger.info("Running backtest...")
     runner = BacktestRunner(symbol=symbol, timeframe=resolved_timeframe, initial_capital=initial_capital)
     metrics = runner.run(df)
-    
+
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward validation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WalkForwardWindow:
+    """Résultats d'une fenêtre walk-forward."""
+    window_idx: int
+    start_date: str
+    end_date: str
+    n_candles: int
+    metrics: BacktestMetrics
+
+
+@dataclass
+class WalkForwardResult:
+    """Agrégat des résultats walk-forward sur toutes les fenêtres."""
+    symbol: str
+    timeframe: str
+    n_windows: int
+    windows: List[WalkForwardWindow] = field(default_factory=list)
+
+    @property
+    def avg_return_pct(self) -> float:
+        vals = [w.metrics.realized_pnl_pct for w in self.windows]
+        return float(np.mean(vals)) if vals else 0.0
+
+    @property
+    def avg_win_rate(self) -> float:
+        vals = [w.metrics.win_rate_pct for w in self.windows]
+        return float(np.mean(vals)) if vals else 0.0
+
+    @property
+    def avg_sharpe(self) -> float:
+        vals = [w.metrics.sharpe_ratio for w in self.windows]
+        return float(np.mean(vals)) if vals else 0.0
+
+    @property
+    def avg_max_drawdown(self) -> float:
+        vals = [w.metrics.max_drawdown_pct for w in self.windows]
+        return float(np.mean(vals)) if vals else 0.0
+
+    @property
+    def total_trades(self) -> int:
+        return sum(w.metrics.total_trades for w in self.windows)
+
+
+def run_walk_forward(
+    symbol: str,
+    timeframe: str | None = None,
+    days_back: int = 365,
+    n_windows: int = 5,
+    warmup_candles: int = 100,
+    initial_capital: float = 100.0,
+) -> WalkForwardResult:
+    """
+    Validation walk-forward : découpe les données en N fenêtres out-of-sample
+    consécutives (avec période de chauffe) et retourne les métriques de chacune.
+
+    Args:
+        symbol: Paire de trading (ex: "BTC/USDT")
+        timeframe: Timeframe des bougies
+        days_back: Historique total à charger
+        n_windows: Nombre de fenêtres out-of-sample
+        warmup_candles: Bougies de chauffe exclues des métriques (début de chaque fenêtre)
+        initial_capital: Capital de départ par fenêtre
+    """
+    resolved_timeframe = timeframe or config.get_symbol_timeframe(symbol)
+
+    logger.info("Walk-forward: chargement de %d jours pour %s…", days_back, symbol)
+    df_full = fetch_ohlcv_long(symbol, timeframe=resolved_timeframe, days_back=days_back)
+
+    if df_full.empty:
+        logger.error("Walk-forward: aucune donnée pour %s", symbol)
+        return WalkForwardResult(symbol=symbol, timeframe=resolved_timeframe, n_windows=0)
+
+    from strategy import compute_indicators
+    df_full = compute_indicators(df_full, symbol=symbol)
+    df_full.dropna(inplace=True)
+
+    total_candles = len(df_full)
+    if total_candles < n_windows * (warmup_candles + 10):
+        logger.warning(
+            "Walk-forward: pas assez de bougies (%d) pour %d fenêtres avec %d de chauffe.",
+            total_candles, n_windows, warmup_candles,
+        )
+
+    window_size = total_candles // n_windows
+    result = WalkForwardResult(symbol=symbol, timeframe=resolved_timeframe, n_windows=n_windows)
+
+    for idx in range(n_windows):
+        start_idx = idx * window_size
+        end_idx = start_idx + window_size if idx < n_windows - 1 else total_candles
+        df_window = df_full.iloc[start_idx:end_idx]
+
+        if len(df_window) <= warmup_candles:
+            logger.warning("Fenêtre %d trop petite (%d bougies), ignorée.", idx + 1, len(df_window))
+            continue
+
+        runner = BacktestRunner(
+            symbol=symbol,
+            timeframe=resolved_timeframe,
+            initial_capital=initial_capital,
+        )
+        metrics = runner.run(df_window.iloc[warmup_candles:])
+
+        win = WalkForwardWindow(
+            window_idx=idx + 1,
+            start_date=df_window.index[warmup_candles].isoformat(),
+            end_date=df_window.index[-1].isoformat(),
+            n_candles=len(df_window) - warmup_candles,
+            metrics=metrics,
+        )
+        result.windows.append(win)
+        logger.info(
+            "Fenêtre %d/%d : %s → %s | Return: %+.2f%% | Trades: %d | Sharpe: %.2f",
+            idx + 1, n_windows,
+            win.start_date[:10], win.end_date[:10],
+            metrics.realized_pnl_pct, metrics.total_trades, metrics.sharpe_ratio,
+        )
+
+    return result
+
+
+def print_walk_forward_report(result: WalkForwardResult) -> None:
+    """Affiche le rapport walk-forward."""
+    print("\n" + "=" * 90)
+    print(f"WALK-FORWARD REPORT: {result.symbol} | {result.timeframe} | {result.n_windows} fenêtres")
+    print("=" * 90)
+
+    header = f"{'Win':>4}  {'Début':>10}  {'Fin':>10}  {'Bougies':>8}  {'Return':>9}  {'Trades':>7}  {'Win%':>6}  {'Sharpe':>7}  {'MaxDD%':>7}"
+    print(header)
+    print("-" * 90)
+
+    for w in result.windows:
+        m = w.metrics
+        print(
+            f"{w.window_idx:>4}  {w.start_date[:10]:>10}  {w.end_date[:10]:>10}  "
+            f"{w.n_candles:>8}  {m.realized_pnl_pct:>+8.2f}%  {m.total_trades:>7}  "
+            f"{m.win_rate_pct:>5.1f}%  {m.sharpe_ratio:>7.2f}  {m.max_drawdown_pct:>6.2f}%"
+        )
+
+    print("-" * 90)
+    print(
+        f"{'Moy.':>4}  {'':>10}  {'':>10}  {'':>8}  {result.avg_return_pct:>+8.2f}%  "
+        f"{result.total_trades:>7}  {result.avg_win_rate:>5.1f}%  {result.avg_sharpe:>7.2f}  "
+        f"{result.avg_max_drawdown:>6.2f}%"
+    )
+    print("=" * 90)

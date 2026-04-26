@@ -13,7 +13,12 @@ import logging
 from pathlib import Path
 
 import config
-from backtest import run_backtest, print_backtest_report
+from backtest import (
+    print_backtest_report,
+    print_walk_forward_report,
+    run_backtest,
+    run_walk_forward,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +70,24 @@ def main():
         action="store_true",
         help="Use timeframe from strategy group for each symbol"
     )
-    
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help="Run walk-forward validation instead of a single backtest"
+    )
+    parser.add_argument(
+        "--wf-windows",
+        type=int,
+        default=5,
+        help="Number of walk-forward windows (default: 5)"
+    )
+    parser.add_argument(
+        "--wf-warmup",
+        type=int,
+        default=100,
+        help="Warmup candles excluded from each window's metrics (default: 100)"
+    )
+
     args = parser.parse_args()
     
     symbols = config.SYMBOLS if args.multi_symbol else [args.symbol]
@@ -93,16 +115,27 @@ def main():
                 float(symbol_cfg["stop_loss_pct"]),
                 float(symbol_cfg["take_profit_pct"]),
             )
-            metrics = run_backtest(
-                symbol=symbol,
-                timeframe=timeframe,
-                days_back=args.days,
-                initial_capital=args.capital,
-            )
-            
-            print_backtest_report(metrics)
-            all_results.append(metrics)
-            
+
+            if args.walk_forward:
+                wf_result = run_walk_forward(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    days_back=args.days,
+                    n_windows=args.wf_windows,
+                    warmup_candles=args.wf_warmup,
+                    initial_capital=args.capital,
+                )
+                print_walk_forward_report(wf_result)
+            else:
+                metrics = run_backtest(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    days_back=args.days,
+                    initial_capital=args.capital,
+                )
+                print_backtest_report(metrics)
+                all_results.append(metrics)
+
         except Exception as exc:
             logger.error("Failed to backtest %s: %s", symbol, exc, exc_info=True)
     

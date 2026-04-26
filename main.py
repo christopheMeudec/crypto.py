@@ -19,7 +19,7 @@ from api_server import start_server_in_thread
 from data_fetcher import fetch_ohlcv
 from optimizer import optimize_timeframes
 from paper_trader import PaperTrader
-from strategy import get_signal_with_reason
+from strategy import compute_atr, get_signal_with_reason
 from telegram_notifier import TelegramNotifier
 
 # ---------------------------------------------------------------------------
@@ -294,7 +294,8 @@ def run() -> None:
                             symbol, config.MAX_OPEN_POSITIONS, n_open,
                         )
                     else:
-                        entry_result = trader.buy(symbol, current_price)
+                        atr_val = compute_atr(df) if config.USE_ATR_STOPS else None
+                        entry_result = trader.buy(symbol, current_price, atr=atr_val)
                 elif signal == "SELL":
                     # Vérifier s'il y a des positions ouvertes à vendre
                     if trader.get_total_quantity(symbol) > 0:

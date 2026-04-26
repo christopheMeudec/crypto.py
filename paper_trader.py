@@ -40,18 +40,20 @@ class PositionEntry:
     
     stop_loss_price: float | None = None       # Calculé à l'entrée si SL actif
     take_profit_price: float | None = None     # Calculé à l'entrée si TP actif
-    
+    trailing_stop_pct: float | None = None     # % de recul depuis le pic (ex: -2.0)
+    peak_price: float | None = None            # Plus haut prix atteint depuis l'entrée
+
     # Remplies lors de la fermeture
     exit_price: float | None = None
     exit_quantity: float | None = None
     exit_fee: float | None = None
     exit_timestamp: datetime | None = None
-    
+
     # Résultats calculés à la fermeture
     realized_pnl: float | None = None
     realized_pnl_pct: float | None = None
-    
-    status: str = "OPEN"                       # "OPEN" | "CLOSED" | "SL_HIT" | "TP_HIT"
+
+    status: str = "OPEN"                       # "OPEN" | "CLOSED" | "SL_HIT" | "TP_HIT" | "TS_HIT"
     
     def __str__(self) -> str:
         """Format lisible de la position."""
@@ -74,6 +76,8 @@ class PositionEntry:
             "strategy_timeframe": self.strategy_timeframe,
             "stop_loss_price": self.stop_loss_price,
             "take_profit_price": self.take_profit_price,
+            "trailing_stop_pct": self.trailing_stop_pct,
+            "peak_price": self.peak_price,
             "entry_timestamp": self.entry_timestamp.isoformat(),
             "exit_price": self.exit_price,
             "exit_quantity": self.exit_quantity,
@@ -105,6 +109,8 @@ class PositionEntry:
             strategy_timeframe=str(data.get("strategy_timeframe", config.TIMEFRAME)),
             stop_loss_price=_opt_float(data.get("stop_loss_price")),
             take_profit_price=_opt_float(data.get("take_profit_price")),
+            trailing_stop_pct=_opt_float(data.get("trailing_stop_pct")),
+            peak_price=_opt_float(data.get("peak_price")),
             exit_price=_opt_float(data.get("exit_price")),
             exit_quantity=_opt_float(data.get("exit_quantity")),
             exit_fee=_opt_float(data.get("exit_fee")),
@@ -205,12 +211,14 @@ class PaperTrader:
     # Ordres
     # ------------------------------------------------------------------
 
-    def buy(self, symbol: str, price: float) -> PositionEntry | None:
+    def buy(self, symbol: str, price: float, atr: float | None = None) -> PositionEntry | None:
         """
         Achète pour TRADE_ALLOCATION du solde USDT disponible.
 
         Calcule la quantité en tenant compte du slippage et des frais.
         Crée une PositionEntry avec stop-loss et take-profit si activés.
+        Si USE_ATR_STOPS est vrai et atr fourni, les niveaux SL/TP sont calculés
+        dynamiquement à partir de l'ATR ; sinon on utilise les pourcentages fixes.
         """
         with self._lock:
             symbol_cfg = config.get_symbol_config(symbol)
@@ -236,8 +244,19 @@ class PaperTrader:
             stop_loss_price = None
             take_profit_price = None
             if config.ENABLE_STOPS:
-                stop_loss_price = price * (1 + float(symbol_cfg["stop_loss_pct"]) / 100)
-                take_profit_price = price * (1 + float(symbol_cfg["take_profit_pct"]) / 100)
+                if config.USE_ATR_STOPS and atr is not None:
+                    stop_loss_price = price - config.ATR_MULTIPLIER_SL * atr
+                    take_profit_price = price + config.ATR_MULTIPLIER_TP * atr
+                else:
+                    stop_loss_price = price * (1 + float(symbol_cfg["stop_loss_pct"]) / 100)
+                    take_profit_price = price * (1 + float(symbol_cfg["take_profit_pct"]) / 100)
+
+            # Trailing stop
+            trailing_stop_pct = None
+            peak_price_val = None
+            if config.ENABLE_TRAILING_STOP:
+                trailing_stop_pct = config.TRAILING_STOP_PCT
+                peak_price_val = price
 
             # Créer la position entry
             entry_cost_basis = quantity * price + entry_fee
@@ -256,6 +275,8 @@ class PaperTrader:
                 strategy_timeframe=str(symbol_cfg["timeframe"]),
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price,
+                trailing_stop_pct=trailing_stop_pct,
+                peak_price=peak_price_val,
                 status="OPEN"
             )
 
@@ -357,7 +378,7 @@ class PaperTrader:
 
     def _auto_close_entries(self, symbol: str, price: float) -> List[PositionEntry]:
         """
-        Vérifie et ferme automatiquement les entries qui ont atteint SL ou TP.
+        Vérifie et ferme automatiquement les entries qui ont atteint SL, TP ou TS.
 
         Retourne la liste des entries fermées.
         """
@@ -368,16 +389,27 @@ class PaperTrader:
             for entry in open_entries:
                 close_reason = None
 
+                # Mettre à jour le pic (trailing stop)
+                if entry.peak_price is not None and price > entry.peak_price:
+                    entry.peak_price = price
+
                 # Vérifier SL
                 if entry.stop_loss_price is not None and price <= entry.stop_loss_price:
                     close_reason = "SL_HIT"
 
-                # Vérifier TP (prend priorité si les deux sont atteints)
+                # Vérifier TP (prend priorité sur SL si les deux sont atteints)
                 elif entry.take_profit_price is not None and price >= entry.take_profit_price:
                     close_reason = "TP_HIT"
 
+                # Vérifier trailing stop
+                elif (
+                    entry.trailing_stop_pct is not None
+                    and entry.peak_price is not None
+                    and price <= entry.peak_price * (1 + entry.trailing_stop_pct / 100)
+                ):
+                    close_reason = "TS_HIT"
+
                 if close_reason:
-                    # Fermer cette entry (RLock permet la réentrance depuis buy/sell)
                     self._close_entry(entry, price, close_reason)
                     closed.append(entry)
 

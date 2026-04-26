@@ -41,6 +41,16 @@ ENABLE_STOPS = True               # Activer/désactiver SL & TP
 STOP_LOSS_PCT = -3.0              # Stop-loss en % (ex: -5% = ferme à 95% du prix d'entrée)
 TAKE_PROFIT_PCT = 6.0             # Take-profit en % (ex: 10% = ferme à 110% du prix d'entrée)
 
+# --- SL/TP dynamiques basés sur l'ATR ---
+USE_ATR_STOPS = os.getenv("USE_ATR_STOPS", "false").lower() == "true"
+ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
+ATR_MULTIPLIER_SL = float(os.getenv("ATR_MULTIPLIER_SL", "2.0"))
+ATR_MULTIPLIER_TP = float(os.getenv("ATR_MULTIPLIER_TP", "3.0"))
+
+# --- Trailing stop ---
+ENABLE_TRAILING_STOP = os.getenv("ENABLE_TRAILING_STOP", "false").lower() == "true"
+TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "-2.0"))
+
 # --- Frais & Slippage (simulation réaliste) ---
 TAKER_FEE_PCT = 0.1               # Frais taker Binance (0.1%)
 SLIPPAGE_PCT = 0.05               # Slippage moyen sur les ordres (0.05%)
