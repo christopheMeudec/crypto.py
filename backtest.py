@@ -165,42 +165,57 @@ def fetch_ohlcv_long(
     fetched_candles = 0
     
     for batch_idx in range(num_batches):
-        try:
-            # Fetch batch
-            remaining = total_candles_needed - fetched_candles
-            if remaining <= 0:
-                break
-
-            batch_limit = min(batch_size, remaining)
-            df_batch = fetch_ohlcv(symbol, timeframe=timeframe, limit=batch_limit, since=since_ms)
-            
-            if df_batch.empty:
-                logger.warning("Empty batch %d, stopping.", batch_idx)
-                break
-            
-            all_data.append(df_batch)
-            fetched_candles += len(df_batch)
-            logger.debug("Batch %d/%d: %d candles", batch_idx + 1, num_batches, len(df_batch))
-
-            # Move window forward to avoid repeatedly fetching the same latest candles.
-            last_ts_ms = int(df_batch.index[-1].timestamp() * 1000)
-            next_since_ms = last_ts_ms + timeframe_ms
-            if next_since_ms <= since_ms:
-                logger.warning("Pagination stalled at batch %d, stopping.", batch_idx)
-                break
-            since_ms = next_since_ms
-
-            if len(df_batch) < batch_limit:
-                logger.info("Reached exchange history limit at batch %d.", batch_idx + 1)
-                break
-            
-            # Respect rate limits (wait 0.5s between requests)
-            if batch_idx < num_batches - 1:
-                time.sleep(0.5)
-        
-        except Exception as exc:
-            logger.error("Error fetching batch %d: %s", batch_idx, exc)
+        remaining = total_candles_needed - fetched_candles
+        if remaining <= 0:
             break
+
+        batch_limit = min(batch_size, remaining)
+
+        # Retry jusqu'à 3 fois avant d'abandonner le batch
+        df_batch = None
+        for attempt in range(1, 4):
+            try:
+                df_batch = fetch_ohlcv(symbol, timeframe=timeframe, limit=batch_limit, since=since_ms)
+                break
+            except Exception as exc:
+                if attempt < 3:
+                    logger.warning(
+                        "Batch %d tentative %d/3 échouée : %s. Nouvelle tentative dans 1s.",
+                        batch_idx + 1, attempt, exc,
+                    )
+                    time.sleep(1.0)
+                else:
+                    logger.error(
+                        "Batch %d abandonné après 3 tentatives : %s. Données partielles renvoyées.",
+                        batch_idx + 1, exc,
+                    )
+
+        if df_batch is None:
+            break
+
+        if df_batch.empty:
+            logger.warning("Batch %d vide, arrêt de la pagination.", batch_idx + 1)
+            break
+
+        all_data.append(df_batch)
+        fetched_candles += len(df_batch)
+        logger.debug("Batch %d/%d: %d bougies", batch_idx + 1, num_batches, len(df_batch))
+
+        # Avancer la fenêtre pour le prochain batch
+        last_ts_ms = int(df_batch.index[-1].timestamp() * 1000)
+        next_since_ms = last_ts_ms + timeframe_ms
+        if next_since_ms <= since_ms:
+            logger.warning("Pagination bloquée au batch %d, arrêt.", batch_idx + 1)
+            break
+        since_ms = next_since_ms
+
+        if len(df_batch) < batch_limit:
+            logger.info("Limite historique exchange atteinte au batch %d.", batch_idx + 1)
+            break
+
+        # Respect des rate limits (0.5s entre requêtes)
+        if batch_idx < num_batches - 1:
+            time.sleep(0.5)
     
     if not all_data:
         logger.error("No data fetched for %s", symbol)

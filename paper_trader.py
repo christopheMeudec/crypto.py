@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -137,6 +138,8 @@ class PaperTrader:
             self.data_dir.mkdir(parents=True, exist_ok=True)
         self.trades_file = self.data_dir / "trades.json"
         self.snapshots_file = self.data_dir / "portfolio_snapshots.json"
+        # RLock (réentrant) : protège usdt_balance et entries contre les accès concurrents
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Helpers pour accéder aux positions
@@ -172,177 +175,180 @@ class PaperTrader:
     def buy(self, symbol: str, price: float) -> PositionEntry | None:
         """
         Achète pour TRADE_ALLOCATION du solde USDT disponible.
-        
+
         Calcule la quantité en tenant compte du slippage et des frais.
         Crée une PositionEntry avec stop-loss et take-profit si activés.
         """
-        symbol_cfg = config.get_symbol_config(symbol)
-        spend = self.usdt_balance * float(symbol_cfg["trade_allocation"])
-        if spend < 1.0:
-            logger.warning("[%s] Solde USDT insuffisant pour acheter (%.2f USDT).", symbol, self.usdt_balance)
-            return None
+        with self._lock:
+            symbol_cfg = config.get_symbol_config(symbol)
+            spend = self.usdt_balance * float(symbol_cfg["trade_allocation"])
+            if spend < 1.0:
+                logger.warning("[%s] Solde USDT insuffisant pour acheter (%.2f USDT).", symbol, self.usdt_balance)
+                return None
 
-        # Applique slippage et frais au calcul de quantité
-        # Slippage réduit la quantité achetée
-        # Frais augmentent le coût effectif
-        effective_price = price * (1 + config.TAKER_FEE_PCT / 100)
-        quantity = (spend * (1 - config.SLIPPAGE_PCT / 100)) / effective_price
-        
-        # Frais payés à l'achat
-        entry_fee = spend * (config.TAKER_FEE_PCT / 100)
-        
-        # Déduire spend + frais du solde
-        total_cost = spend + entry_fee
-        self.usdt_balance -= total_cost
-        
-        # Calculer SL/TP prices si activés
-        stop_loss_price = None
-        take_profit_price = None
-        if config.ENABLE_STOPS:
-            stop_loss_price = price * (1 + float(symbol_cfg["stop_loss_pct"]) / 100)
-            take_profit_price = price * (1 + float(symbol_cfg["take_profit_pct"]) / 100)
-        
-        # Créer la position entry
-        entry_cost_basis = quantity * price + entry_fee
-        entry_id = f"{symbol}_{uuid.uuid4().hex[:8]}"
-        now_ts = datetime.now(timezone.utc)
-        
-        entry = PositionEntry(
-            entry_id=entry_id,
-            symbol=symbol,
-            entry_price=price,
-            entry_quantity=quantity,
-            entry_timestamp=now_ts,
-            entry_fee=entry_fee,
-            entry_cost_basis=entry_cost_basis,
-            strategy_group=str(symbol_cfg["group"]),
-            strategy_timeframe=str(symbol_cfg["timeframe"]),
-            stop_loss_price=stop_loss_price,
-            take_profit_price=take_profit_price,
-            status="OPEN"
-        )
-        
-        self.entries.append(entry)
-        
-        # Créer un Trade pour l'historique
-        trade = Trade(
-            symbol=symbol,
-            side="BUY",
-            price=price,
-            quantity=quantity,
-            fee=entry_fee,
-            timestamp=now_ts
-        )
-        self.trades.append(trade)
-        self._persist_trade(trade)
-        
-        logger.info(
-            "%s | Qty: %.6f | Fee: $%.2f | SL: %s | TP: %s | USDT restant: $%.2f",
-            trade,
-            quantity,
-            entry_fee,
-            f"${stop_loss_price:,.2f}" if stop_loss_price else "N/A",
-            f"${take_profit_price:,.2f}" if take_profit_price else "N/A",
-            self.usdt_balance
-        )
-        
-        return entry
+            # Applique slippage et frais au calcul de quantité
+            # Slippage réduit la quantité achetée
+            # Frais augmentent le coût effectif
+            effective_price = price * (1 + config.TAKER_FEE_PCT / 100)
+            quantity = (spend * (1 - config.SLIPPAGE_PCT / 100)) / effective_price
+
+            # Frais payés à l'achat
+            entry_fee = spend * (config.TAKER_FEE_PCT / 100)
+
+            # Déduire spend + frais du solde
+            total_cost = spend + entry_fee
+            self.usdt_balance -= total_cost
+
+            # Calculer SL/TP prices si activés
+            stop_loss_price = None
+            take_profit_price = None
+            if config.ENABLE_STOPS:
+                stop_loss_price = price * (1 + float(symbol_cfg["stop_loss_pct"]) / 100)
+                take_profit_price = price * (1 + float(symbol_cfg["take_profit_pct"]) / 100)
+
+            # Créer la position entry
+            entry_cost_basis = quantity * price + entry_fee
+            entry_id = f"{symbol}_{uuid.uuid4().hex[:8]}"
+            now_ts = datetime.now(timezone.utc)
+
+            entry = PositionEntry(
+                entry_id=entry_id,
+                symbol=symbol,
+                entry_price=price,
+                entry_quantity=quantity,
+                entry_timestamp=now_ts,
+                entry_fee=entry_fee,
+                entry_cost_basis=entry_cost_basis,
+                strategy_group=str(symbol_cfg["group"]),
+                strategy_timeframe=str(symbol_cfg["timeframe"]),
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                status="OPEN"
+            )
+
+            self.entries.append(entry)
+
+            # Créer un Trade pour l'historique
+            trade = Trade(
+                symbol=symbol,
+                side="BUY",
+                price=price,
+                quantity=quantity,
+                fee=entry_fee,
+                timestamp=now_ts
+            )
+            self.trades.append(trade)
+            self._persist_trade(trade)
+
+            logger.info(
+                "%s | Qty: %.6f | Fee: $%.2f | SL: %s | TP: %s | USDT restant: $%.2f",
+                trade,
+                quantity,
+                entry_fee,
+                f"${stop_loss_price:,.2f}" if stop_loss_price else "N/A",
+                f"${take_profit_price:,.2f}" if take_profit_price else "N/A",
+                self.usdt_balance
+            )
+
+            return entry
 
     def sell(self, symbol: str, price: float, entry_id: str | None = None) -> PositionEntry | None:
         """
         Vend une position ouverte pour ce symbole.
-        
+
         Si entry_id est None : ferme la position la plus ancienne (FIFO).
         Sinon : ferme l'entry spécifiée.
-        
+
         Applique les frais et calcule le PnL réalisé.
         """
-        open_entries = self.get_open_entries(symbol)
-        if not open_entries:
-            logger.warning("[%s] Aucune position ouverte à vendre.", symbol)
-            return None
-        
-        # Sélectionner l'entry à fermer
-        if entry_id:
-            entry = next((e for e in open_entries if e.entry_id == entry_id), None)
-            if not entry:
-                logger.warning("[%s] Entry %s not found or not open.", symbol, entry_id)
+        with self._lock:
+            open_entries = self.get_open_entries(symbol)
+            if not open_entries:
+                logger.warning("[%s] Aucune position ouverte à vendre.", symbol)
                 return None
-        else:
-            # FIFO : la plus ancienne
-            entry = min(open_entries, key=lambda e: e.entry_timestamp)
-        
-        # Calcul du proceeds
-        proceeds = entry.entry_quantity * price
-        exit_fee = proceeds * (config.TAKER_FEE_PCT / 100)
-        proceeds_after_fee = proceeds - exit_fee
-        
-        # Calcul du PnL réalisé
-        realized_pnl = proceeds_after_fee - entry.entry_cost_basis
-        realized_pnl_pct = (realized_pnl / entry.entry_cost_basis) * 100 if entry.entry_cost_basis > 0 else 0.0
-        
-        # Mettre à jour l'entry
-        entry.exit_price = price
-        entry.exit_quantity = entry.entry_quantity
-        entry.exit_fee = exit_fee
-        entry.exit_timestamp = datetime.now(timezone.utc)
-        entry.realized_pnl = realized_pnl
-        entry.realized_pnl_pct = realized_pnl_pct
-        entry.status = "CLOSED"
-        
-        # Ajouter au solde
-        self.usdt_balance += proceeds_after_fee
-        
-        # Créer un Trade pour l'historique
-        trade = Trade(
-            symbol=symbol,
-            side="SELL",
-            price=price,
-            quantity=entry.entry_quantity,
-            fee=exit_fee,
-            timestamp=entry.exit_timestamp
-        )
-        self.trades.append(trade)
-        self._persist_trade(trade)
-        
-        logger.info(
-            "%s | Entry: %s | PnL: %+.2f USDT (%+.2f%%) | Fee: $%.2f | USDT total: $%.2f",
-            trade,
-            entry.entry_id[:12],
-            realized_pnl,
-            realized_pnl_pct,
-            exit_fee,
-            self.usdt_balance
-        )
-        
-        return entry
+
+            # Sélectionner l'entry à fermer
+            if entry_id:
+                entry = next((e for e in open_entries if e.entry_id == entry_id), None)
+                if not entry:
+                    logger.warning("[%s] Entry %s not found or not open.", symbol, entry_id)
+                    return None
+            else:
+                # FIFO : la plus ancienne
+                entry = min(open_entries, key=lambda e: e.entry_timestamp)
+
+            # Calcul du proceeds
+            proceeds = entry.entry_quantity * price
+            exit_fee = proceeds * (config.TAKER_FEE_PCT / 100)
+            proceeds_after_fee = proceeds - exit_fee
+
+            # Calcul du PnL réalisé
+            realized_pnl = proceeds_after_fee - entry.entry_cost_basis
+            realized_pnl_pct = (realized_pnl / entry.entry_cost_basis) * 100 if entry.entry_cost_basis > 0 else 0.0
+
+            # Mettre à jour l'entry
+            entry.exit_price = price
+            entry.exit_quantity = entry.entry_quantity
+            entry.exit_fee = exit_fee
+            entry.exit_timestamp = datetime.now(timezone.utc)
+            entry.realized_pnl = realized_pnl
+            entry.realized_pnl_pct = realized_pnl_pct
+            entry.status = "CLOSED"
+
+            # Ajouter au solde
+            self.usdt_balance += proceeds_after_fee
+
+            # Créer un Trade pour l'historique
+            trade = Trade(
+                symbol=symbol,
+                side="SELL",
+                price=price,
+                quantity=entry.entry_quantity,
+                fee=exit_fee,
+                timestamp=entry.exit_timestamp
+            )
+            self.trades.append(trade)
+            self._persist_trade(trade)
+
+            logger.info(
+                "%s | Entry: %s | PnL: %+.2f USDT (%+.2f%%) | Fee: $%.2f | USDT total: $%.2f",
+                trade,
+                entry.entry_id[:12],
+                realized_pnl,
+                realized_pnl_pct,
+                exit_fee,
+                self.usdt_balance
+            )
+
+            return entry
 
     def _auto_close_entries(self, symbol: str, price: float) -> List[PositionEntry]:
         """
         Vérifie et ferme automatiquement les entries qui ont atteint SL ou TP.
-        
+
         Retourne la liste des entries fermées.
         """
-        closed = []
-        open_entries = self.get_open_entries(symbol)
-        
-        for entry in open_entries:
-            close_reason = None
-            
-            # Vérifier SL
-            if entry.stop_loss_price is not None and price <= entry.stop_loss_price:
-                close_reason = "SL_HIT"
-            
-            # Vérifier TP (prend priorité si les deux sont atteints)
-            elif entry.take_profit_price is not None and price >= entry.take_profit_price:
-                close_reason = "TP_HIT"
-            
-            if close_reason:
-                # Fermer cette entry
-                self._close_entry(entry, price, close_reason)
-                closed.append(entry)
-        
-        return closed
+        with self._lock:
+            closed = []
+            open_entries = self.get_open_entries(symbol)
+
+            for entry in open_entries:
+                close_reason = None
+
+                # Vérifier SL
+                if entry.stop_loss_price is not None and price <= entry.stop_loss_price:
+                    close_reason = "SL_HIT"
+
+                # Vérifier TP (prend priorité si les deux sont atteints)
+                elif entry.take_profit_price is not None and price >= entry.take_profit_price:
+                    close_reason = "TP_HIT"
+
+                if close_reason:
+                    # Fermer cette entry (RLock permet la réentrance depuis buy/sell)
+                    self._close_entry(entry, price, close_reason)
+                    closed.append(entry)
+
+            return closed
 
     def _close_entry(self, entry: PositionEntry, price: float, status: str) -> None:
         """

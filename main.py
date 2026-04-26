@@ -7,6 +7,7 @@ Mode      : Paper trading (aucun ordre réel)
 
 import argparse
 import logging
+import signal
 import threading
 import time
 
@@ -27,6 +28,24 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Arrêt gracieux
+# ---------------------------------------------------------------------------
+
+_shutdown_event = threading.Event()
+
+
+def _request_shutdown(signum: int, frame: object) -> None:
+    logger.info("Signal %d reçu — arrêt demandé.", signum)
+    _shutdown_event.set()
+
+
+signal.signal(signal.SIGINT, _request_shutdown)
+try:
+    signal.signal(signal.SIGTERM, _request_shutdown)
+except (OSError, AttributeError):
+    pass  # SIGTERM non disponible sur toutes les plateformes
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +177,7 @@ def run() -> None:
     else:
         logger.info("Telegram desactive (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID manquants).")
 
-    while True:
+    while not _shutdown_event.is_set():
         cycle_started_at = time.time()
         prices: dict[str, float] = {}
         processed_symbols: list[str] = []
@@ -259,7 +278,33 @@ def run() -> None:
         sleep_seconds = max(1, min(30, int(next_due_at - time.time())))
         if processed_symbols:
             logger.info("Cycle traité (%s). Prochaine vérification dans %d secondes.", ", ".join(processed_symbols), sleep_seconds)
-        time.sleep(sleep_seconds)
+        _shutdown_event.wait(timeout=sleep_seconds)
+
+    # ------------------------------------------------------------------
+    # Cleanup à l'arrêt
+    # ------------------------------------------------------------------
+    logger.info("Arrêt en cours — sauvegarde de l'état du portefeuille...")
+    with state_lock:
+        current_prices = dict(latest_prices)
+    trader.print_summary(current_prices)
+    trader.record_snapshot(current_prices)
+
+    open_positions = trader.get_open_entries_all()
+    if open_positions:
+        logger.info("%d position(s) ouverte(s) au moment de l'arrêt :", len(open_positions))
+        for pos in open_positions:
+            logger.info("  %s", pos)
+    else:
+        logger.info("Aucune position ouverte.")
+
+    if notifier.enabled:
+        n_open = len(open_positions)
+        notifier.send_message(
+            f"Bot arrêté proprement.\n"
+            f"{n_open} position(s) ouverte(s) sauvegardée(s).\n"
+            f"USDT : ${trader.usdt_balance:,.2f}"
+        )
+    logger.info("Bot arrêté.")
 
 
 def run_timeframe_optimization(history_limit: int) -> None:
