@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(pip show *)",
+      "Bash(where python *)",
+      "Bash(C:/Users/chris/AppData/Local/Python/bin/python.exe -m pytest --version)",
+      "Bash(C:/Users/chris/AppData/Local/Python/bin/python.exe -m pip show ccxt)",
+      "Bash(pip install *)"
+    ]
+  }
+}
