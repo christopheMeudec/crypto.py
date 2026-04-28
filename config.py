@@ -89,8 +89,21 @@ DEFAULT_SYMBOL_STRATEGY = {
 
 STRATEGY_GROUPS = {
 	"majors": {
-		"symbols": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT"],
+		"symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
 		"timeframe": "30m",
+		"rsi_period": 14,
+		"rsi_oversold": 42,
+		"rsi_overbought": 61,
+		"macd_fast": 8,
+		"macd_slow": 26,
+		"macd_signal": 9,
+		"trade_allocation": 0.16,
+		"stop_loss_pct": -3.8,
+		"take_profit_pct": 7.5,
+	},
+	"bnb": {
+		"symbols": ["BNB/USDT"],
+		"timeframe": "15m",
 		"rsi_period": 14,
 		"rsi_oversold": 42,
 		"rsi_overbought": 61,
@@ -105,13 +118,13 @@ STRATEGY_GROUPS = {
 		"symbols": ["ADA/USDT", "XRP/USDT", "DOGE/USDT", "POL/USDT", "LINK/USDT", "AVAX/USDT"],
 		"timeframe": "30m",
 		"rsi_period": 14,
-		"rsi_oversold": 38,
-		"rsi_overbought": 60,
+		"rsi_oversold": 43,
+		"rsi_overbought": 63,
 		"macd_fast": 8,
 		"macd_slow": 26,
 		"macd_signal": 9,
 		"trade_allocation": 0.08,
-		"stop_loss_pct": -2.3,
+		"stop_loss_pct": -1.8,
 		"take_profit_pct": 4.8,
 	},
 }
@@ -191,5 +204,5 @@ API_TOKEN = os.getenv("API_TOKEN", "")
 LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "Europe/Paris")
 
 # --- Optimisation des timeframes ---
-OPTIMIZATION_TIMEFRAMES = ["30m", "1h", "2h", "4h"]
+OPTIMIZATION_TIMEFRAMES = ["15m", "30m", "1h", "2h", "4h"]
 OPTIMIZATION_OHLCV_LIMIT = 1000

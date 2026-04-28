@@ -31,8 +31,18 @@ class TestGetSymbolConfig:
 
         assert cfg["group"] == "alts"
         assert float(cfg["trade_allocation"]) == pytest.approx(0.08)
-        assert float(cfg["stop_loss_pct"]) == pytest.approx(-2.3)
+        assert float(cfg["stop_loss_pct"]) == pytest.approx(-1.8)
         assert float(cfg["take_profit_pct"]) == pytest.approx(4.8)
+
+    def test_bnb_groupe_dedie(self):
+        """BNB/USDT appartient au groupe 'bnb' avec timeframe 15m."""
+        cfg = config.get_symbol_config("BNB/USDT")
+
+        assert cfg["group"] == "bnb"
+        assert str(cfg["timeframe"]) == "15m"
+        assert float(cfg["trade_allocation"]) == pytest.approx(0.16)
+        assert float(cfg["stop_loss_pct"]) == pytest.approx(-3.8)
+        assert float(cfg["take_profit_pct"]) == pytest.approx(7.5)
 
     def test_alts_xrp(self):
         """XRP/USDT est dans le groupe 'alts'."""
@@ -73,8 +83,10 @@ class TestGetSymbolGroup:
     def test_groupe_majors(self):
         assert config.get_symbol_group("BTC/USDT") == "majors"
         assert config.get_symbol_group("ETH/USDT") == "majors"
-        assert config.get_symbol_group("BNB/USDT") == "majors"
         assert config.get_symbol_group("SOL/USDT") == "majors"
+
+    def test_groupe_bnb(self):
+        assert config.get_symbol_group("BNB/USDT") == "bnb"
 
     def test_groupe_alts(self):
         assert config.get_symbol_group("ADA/USDT") == "alts"
