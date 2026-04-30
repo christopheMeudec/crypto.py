@@ -118,6 +118,12 @@ def _dashboard_html() -> str:
     .cfg-title { font-size: 0.78rem; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.7px; margin: 12px 0 4px; }
     .badge-majors { background: #1e5a7a; color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
     .badge-alts { background: #b8641a; color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
+    #log-entries { max-height: 500px; overflow-y: auto; }
+    .log-line { font-family: monospace; font-size: 0.78rem; padding: 2px 4px; border-bottom: 1px solid var(--line); word-break: break-all; }
+    .log-time { color: #888; }
+    .log-level { font-weight: 600; display: inline-block; min-width: 4.5em; }
+    .log-warn  { background: #fff8e1; }
+    .log-error { background: #ffebee; color: var(--bad); }
   </style>
 </head>
 <body>
@@ -128,6 +134,7 @@ def _dashboard_html() -> str:
     <div class=\"tabs\">
       <button class=\"tab-btn active\" data-tab=\"dashboard\">Dashboard</button>
       <button class=\"tab-btn\" data-tab=\"config\">Configuration</button>
+      <button class=\"tab-btn\" data-tab=\"logs\">Logs</button>
     </div>
 
     <div id=\"tab-dashboard\" class=\"tab-panel active\">
@@ -158,6 +165,13 @@ def _dashboard_html() -> str:
 
     <div id=\"tab-config\" class=\"tab-panel\">
       <div id=\"config-content\"><p style=\"opacity:0.7;padding:8px 0\">Chargement...</p></div>
+    </div>
+
+    <div id=\"tab-logs\" class=\"tab-panel\">
+      <div class=\"card\">
+        <div class=\"label\">Activite recente</div>
+        <div id=\"log-entries\"><p style=\"opacity:0.7\">Chargement...</p></div>
+      </div>
     </div>
   </div>
 
@@ -233,8 +247,38 @@ def _dashboard_html() -> str:
         const panel = document.getElementById('tab-' + btn.dataset.tab);
         if (panel) panel.classList.add('active');
         if (btn.dataset.tab === 'config' && !configLoaded) loadConfig();
+        if (btn.dataset.tab === 'logs') loadLogs();
       });
     });
+
+    function escHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderLogs(items) {
+      const el = document.getElementById('log-entries');
+      if (!el) return;
+      const rows = items.slice().reverse().map(item => {
+        const cls = item.level === 'ERROR' ? 'log-error'
+                  : item.level === 'WARNING' ? 'log-warn' : '';
+        return `<div class=\"log-line ${cls}\"><span class=\"log-time\">${escHtml(item.t)}</span> `
+             + `<span class=\"log-level\">${escHtml(item.level)}</span> ${escHtml(item.msg)}</div>`;
+      }).join('');
+      el.innerHTML = rows || '<div style=\"opacity:0.7\">Aucun log disponible.</div>';
+    }
+
+    async function loadLogs() {
+      const panel = document.getElementById('tab-logs');
+      if (!panel || !panel.classList.contains('active')) return;
+      try {
+        const res = await fetch('/api/logs?limit=200', { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        renderLogs(data.items || []);
+      } catch(e) {}
+    }
+
+    setInterval(loadLogs, 5000);
 
     async function loadConfig() {
       try {
@@ -344,11 +388,17 @@ def _dashboard_html() -> str:
 
 
 class MobileAPIServer:
-    def __init__(self, state_provider: Callable[[], dict]) -> None:
+    def __init__(
+        self,
+        state_provider: Callable[[], dict],
+        log_provider: Callable[[int], list] | None = None,
+    ) -> None:
         self._state_provider = state_provider
+        self._log_provider = log_provider
 
     def create_handler(self):
         state_provider = self._state_provider
+        log_provider = self._log_provider
 
         class Handler(BaseHTTPRequestHandler):
             def _send_json(self, payload: dict | list, status: int = HTTPStatus.OK) -> None:
@@ -454,6 +504,16 @@ class MobileAPIServer:
                     })
                     return
 
+                if parsed.path == "/api/logs":
+                    limit = 200
+                    try:
+                        limit = int((query.get("limit") or ["200"])[0])
+                    except ValueError:
+                        pass
+                    items = log_provider(max(1, min(limit, 500))) if log_provider else []
+                    self._send_json({"items": items})
+                    return
+
                 self._send_json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
 
             def log_message(self, fmt: str, *args):  # type: ignore[override]
@@ -462,8 +522,11 @@ class MobileAPIServer:
         return Handler
 
 
-def start_server_in_thread(state_provider: Callable[[], dict]) -> threading.Thread:
-    server = MobileAPIServer(state_provider)
+def start_server_in_thread(
+    state_provider: Callable[[], dict],
+    log_provider: Callable[[int], list] | None = None,
+) -> threading.Thread:
+    server = MobileAPIServer(state_provider, log_provider)
     httpd = ThreadingHTTPServer((config.API_HOST, config.API_PORT), server.create_handler())
 
     def run_server() -> None:

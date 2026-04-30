@@ -6,6 +6,7 @@ Mode      : Paper trading (aucun ordre réel)
 """
 
 import argparse
+import collections
 import logging
 import signal
 import threading
@@ -26,7 +27,28 @@ from telegram_notifier import TelegramNotifier
 # Logging
 # ---------------------------------------------------------------------------
 
-def _setup_logging() -> None:
+class _MemoryLogHandler(logging.Handler):
+    """Conserve les N dernières entrées de log en mémoire pour l'API web."""
+    def __init__(self, capacity: int = 500) -> None:
+        super().__init__()
+        self._buf: collections.deque = collections.deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._buf.append({
+                "t": self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
+                "level": record.levelname,
+                "msg": record.getMessage(),
+            })
+        except Exception:
+            self.handleError(record)
+
+    def get_lines(self, limit: int = 200) -> list[dict]:
+        items = list(self._buf)
+        return items[-limit:]
+
+
+def _setup_logging() -> _MemoryLogHandler:
     """Console + fichier rotatif (10 Mo × 5 fichiers) dans LOG_DIR."""
     log_dir = Path(config.LOG_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -47,9 +69,12 @@ def _setup_logging() -> None:
     )
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
+    mem = _MemoryLogHandler(capacity=500)
+    root.addHandler(mem)
+    return mem
 
 
-_setup_logging()
+_mem_handler = _setup_logging()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -124,7 +149,8 @@ def run() -> None:
                     "signal_diagnostics": dict(latest_signal_reasons),
                 }
 
-        start_server_in_thread(state_provider)
+        log_provider = lambda limit=200: _mem_handler.get_lines(limit)  # noqa: E731
+        start_server_in_thread(state_provider, log_provider)
 
     if notifier.enabled and config.TELEGRAM_ENABLE_COMMANDS:
         def command_handler(command: str, args: list[str]) -> str:
