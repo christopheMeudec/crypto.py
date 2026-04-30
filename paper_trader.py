@@ -128,6 +128,7 @@ class Trade:
     price: float
     quantity: float
     fee: float = 0.0    # Frais pour ce trade
+    pnl: float | None = None   # PnL réalisé (SELL uniquement)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __str__(self) -> str:
@@ -138,8 +139,8 @@ class Trade:
             f"{self.side:4s} {self.quantity:.6f} {self.symbol} @ ${self.price:,.2f}{fee_str}"
         )
 
-    def to_dict(self) -> Dict[str, float | str]:
-        return {
+    def to_dict(self) -> Dict[str, float | str | None]:
+        d: Dict[str, float | str | None] = {
             "symbol": self.symbol,
             "side": self.side,
             "price": self.price,
@@ -147,6 +148,9 @@ class Trade:
             "fee": self.fee,
             "timestamp": self.timestamp.isoformat(),
         }
+        if self.pnl is not None:
+            d["pnl"] = self.pnl
+        return d
 
 
 class PaperTrader:
@@ -359,7 +363,8 @@ class PaperTrader:
                 price=price,
                 quantity=entry.entry_quantity,
                 fee=exit_fee,
-                timestamp=entry.exit_timestamp
+                pnl=realized_pnl,
+                timestamp=entry.exit_timestamp,
             )
             self.trades.append(trade)
             self._persist_trade(trade)

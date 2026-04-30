@@ -154,7 +154,7 @@ def _dashboard_html() -> str:
       <div class=\"label\">Derniers trades</div>
       <table>
         <thead>
-          <tr><th>Date</th><th>Pair</th><th>Side</th><th>Prix</th><th>Quantite</th></tr>
+          <tr><th>Date</th><th>Pair</th><th>Side</th><th>Prix</th><th>Quantite</th><th>PnL</th></tr>
         </thead>
         <tbody id=\"tradesBody\"></tbody>
       </table>
@@ -193,7 +193,12 @@ def _dashboard_html() -> str:
 
       const pos = stats.positions || [];
       const posText = pos.length
-        ? pos.map(p => `${p.symbol}: ${p.quantity.toFixed(6)} (~${fmtUsd(p.value)})`).join('<br/>')
+        ? pos.map(p => {
+            const pnl = p.unrealized_pnl ?? 0;
+            const pnlCls = pnl >= 0 ? 'pos' : 'neg';
+            const pnlStr = `<span class=\"${pnlCls}\">${pnl >= 0 ? '+' : ''}${fmtUsd(pnl)}</span>`;
+            return `${p.symbol}: ${p.quantity.toFixed(6)} (~${fmtUsd(p.value)}) PnL: ${pnlStr}`;
+          }).join('<br/>')
         : 'Aucune position ouverte';
       document.getElementById('positions').innerHTML = posText;
     }
@@ -204,12 +209,16 @@ def _dashboard_html() -> str:
       for (const t of trades) {
         const tr = document.createElement('tr');
         tr.className = t.side === 'BUY' ? 'row-buy' : 'row-sell';
+        const pnlCell = t.side === 'SELL' && t.pnl != null
+          ? `<span class=\"${t.pnl >= 0 ? 'pos' : 'neg'}\">${t.pnl >= 0 ? '+' : ''}${fmtUsd(t.pnl)}</span>`
+          : '<span style=\"opacity:0.4\">-</span>';
         tr.innerHTML = `
           <td>${new Date(t.timestamp).toLocaleString('fr-FR')}</td>
           <td>${t.symbol}</td>
           <td>${t.side}</td>
           <td>${fmtUsd(t.price)}</td>
           <td>${Number(t.quantity).toFixed(6)}</td>
+          <td>${pnlCell}</td>
         `;
         body.appendChild(tr);
       }
