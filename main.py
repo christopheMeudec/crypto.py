@@ -18,6 +18,7 @@ from pathlib import Path
 import config
 from api_server import start_server_in_thread
 from data_fetcher import fetch_ohlcv
+from db import BotDatabase
 from optimizer import optimize_timeframes
 from paper_trader import PaperTrader
 from strategy import compute_atr, get_signal_with_reason
@@ -101,7 +102,8 @@ except (OSError, AttributeError):
 # ---------------------------------------------------------------------------
 
 def run() -> None:
-    trader = PaperTrader(initial_capital=config.INITIAL_CAPITAL_USDT)
+    db = BotDatabase(config.DB_PATH)
+    trader = PaperTrader(initial_capital=config.INITIAL_CAPITAL_USDT, db=db)
     notifier = TelegramNotifier.from_config()
     latest_prices: dict[str, float] = {}
     latest_signal_reasons: dict[str, str] = {}
@@ -149,8 +151,11 @@ def run() -> None:
                     "signal_diagnostics": dict(latest_signal_reasons),
                 }
 
+        def candle_provider(symbol: str, timeframe: str, limit: int) -> list:
+            return db.get_candles(symbol, timeframe, limit)
+
         log_provider = lambda limit=200: _mem_handler.get_lines(limit)  # noqa: E731
-        start_server_in_thread(state_provider, log_provider)
+        start_server_in_thread(state_provider, log_provider, candle_provider)
 
     if notifier.enabled and config.TELEGRAM_ENABLE_COMMANDS:
         def command_handler(command: str, args: list[str]) -> str:
@@ -287,6 +292,7 @@ def run() -> None:
 
             try:
                 df = fetch_ohlcv(symbol, timeframe)
+                db.upsert_candles(symbol, timeframe, df)
                 current_price = float(df["close"].iloc[-1])
                 prices[symbol] = current_price
                 with state_lock:
@@ -409,6 +415,7 @@ def run() -> None:
             f"{n_open} position(s) ouverte(s) sauvegardée(s).\n"
             f"USDT : ${trader.usdt_balance:,.2f}"
         )
+    db.close()
     logger.info("Bot arrêté.")
 
 

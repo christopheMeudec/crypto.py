@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import config
+
+if TYPE_CHECKING:
+    from db import BotDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -165,23 +166,18 @@ class PaperTrader:
     def __init__(
         self,
         initial_capital: float = config.INITIAL_CAPITAL_USDT,
-        data_dir: str | Path | None = None,
         persist: bool = True,
+        db: "BotDatabase | None" = None,
     ) -> None:
         self.initial_capital: float = initial_capital
         self.usdt_balance: float = initial_capital
         self.entries: List[PositionEntry] = []      # Liste des positions (remplace dict positions)
         self.trades: List[Trade] = []
         self.persist = persist
-        self.data_dir = Path(data_dir) if data_dir else Path(config.DATA_DIR)
-        if self.persist:
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.trades_file = self.data_dir / "trades.json"
-        self.snapshots_file = self.data_dir / "portfolio_snapshots.json"
-        self.state_file = self.data_dir / "state.json"
+        self.db = db
         # RLock (réentrant) : protège usdt_balance et entries contre les accès concurrents
         self._lock = threading.RLock()
-        if self.persist:
+        if self.persist and self.db is not None:
             self._load_state()
 
     # ------------------------------------------------------------------
@@ -542,17 +538,15 @@ class PaperTrader:
         }
 
     def record_snapshot(self, prices: Dict[str, float]) -> None:
-        if not self.persist:
+        if not self.persist or self.db is None:
             return
-        self._append_json_record(
-            self.snapshots_file,
-            self.create_snapshot(prices),
-            max_items=config.MAX_STORED_SNAPSHOTS,
-        )
+        self.db.append_snapshot(self.create_snapshot(prices))
 
     def get_recent_trades(self, limit: int = 10) -> List[Dict[str, float | str]]:
         """Retourne les derniers trades (les plus récents en premier)."""
         limit = max(1, limit)
+        if self.db is not None:
+            return self.db.get_recent_trades(limit)
         return [trade.to_dict() for trade in self.trades[-limit:]][::-1]
 
     def get_closed_entries_with_pnl(self, limit: int = 10) -> List[Dict[str, object]]:
@@ -562,8 +556,9 @@ class PaperTrader:
         return [e.to_dict() for e in closed_sorted[:limit]]
 
     def get_history(self, limit: int = 120) -> List[Dict[str, object]]:
-        records = self._read_json_array(self.snapshots_file)
-        return records[-max(1, limit):]
+        if self.db is not None:
+            return self.db.get_recent_snapshots(limit)
+        return []
 
     # ------------------------------------------------------------------
     # Persistance de l'état entre redémarrages
@@ -571,26 +566,18 @@ class PaperTrader:
 
     def save_state(self) -> None:
         """Persiste le solde USDT et les positions ouvertes pour reprise après redémarrage."""
-        if not self.persist:
+        if not self.persist or self.db is None:
             return
-        state = {
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-            "usdt_balance": self.usdt_balance,
-            "open_entries": [e.to_dict() for e in self.entries if e.status == "OPEN"],
-        }
-        try:
-            self.state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Impossible d'écrire l'état : %s", exc)
+        self.db.save_state(
+            datetime.now(timezone.utc).isoformat(),
+            self.usdt_balance,
+            [e.to_dict() for e in self.entries if e.status == "OPEN"],
+        )
 
     def _load_state(self) -> None:
-        """Restaure le solde et les positions ouvertes depuis le fichier d'état."""
-        if not self.state_file.exists():
-            return
-        try:
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("État sauvegardé illisible (%s) — démarrage à zéro.", exc)
+        """Restaure le solde et les positions ouvertes depuis SQLite."""
+        data = self.db.load_state()
+        if data is None:
             return
 
         raw_entries: list = data.get("open_entries", [])
@@ -612,33 +599,6 @@ class PaperTrader:
             logger.info("  Restaurée : %s", entry)
 
     def _persist_trade(self, trade: Trade) -> None:
-        if not self.persist:
+        if not self.persist or self.db is None:
             return
-        self._append_json_record(
-            self.trades_file,
-            trade.to_dict(),
-            max_items=config.MAX_STORED_TRADES,
-        )
-
-    @staticmethod
-    def _read_json_array(path: Path) -> List[Dict[str, object]]:
-        if not path.exists():
-            return []
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                return payload
-        except (OSError, json.JSONDecodeError):
-            logger.warning("Impossible de lire %s, reinitialisation de l'historique.", path)
-        return []
-
-    @staticmethod
-    def _append_json_record(path: Path, record: Dict[str, object], max_items: int) -> None:
-        rows = PaperTrader._read_json_array(path)
-        rows.append(record)
-        if max_items > 0 and len(rows) > max_items:
-            rows = rows[-max_items:]
-        try:
-            path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Impossible d'ecrire %s: %s", path, exc)
+        self.db.append_trade(trade.to_dict())

@@ -124,6 +124,10 @@ def _dashboard_html() -> str:
     .log-level { font-weight: 600; display: inline-block; min-width: 4.5em; }
     .log-warn  { background: #fff8e1; }
     .log-error { background: #ffebee; color: var(--bad); }
+    .chart-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+    .chart-controls select { padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 0.9rem; font-family: inherit; cursor: pointer; }
+    #chart-container { width: 100%; height: 450px; border-radius: 10px; overflow: hidden; }
+    .chart-msg { padding: 40px; text-align: center; opacity: 0.6; }
   </style>
 </head>
 <body>
@@ -135,6 +139,7 @@ def _dashboard_html() -> str:
       <button class=\"tab-btn active\" data-tab=\"dashboard\">Dashboard</button>
       <button class=\"tab-btn\" data-tab=\"config\">Configuration</button>
       <button class=\"tab-btn\" data-tab=\"logs\">Logs</button>
+      <button class=\"tab-btn\" data-tab=\"charts\">Charts</button>
     </div>
 
     <div id=\"tab-dashboard\" class=\"tab-panel active\">
@@ -171,6 +176,27 @@ def _dashboard_html() -> str:
       <div class=\"card\">
         <div class=\"label\">Activite recente</div>
         <div id=\"log-entries\"><p style=\"opacity:0.7\">Chargement...</p></div>
+      </div>
+    </div>
+
+    <div id=\"tab-charts\" class=\"tab-panel\">
+      <div class=\"card\">
+        <div class=\"chart-controls\">
+          <div>
+            <span class=\"label\" style=\"display:inline;margin-right:6px\">Symbole</span>
+            <select id=\"chart-symbol\"></select>
+          </div>
+          <div>
+            <span class=\"label\" style=\"display:inline;margin-right:6px\">Bougies</span>
+            <select id=\"chart-limit\">
+              <option value=\"100\">100</option>
+              <option value=\"200\" selected>200</option>
+              <option value=\"500\">500</option>
+            </select>
+          </div>
+          <button class=\"tab-btn\" onclick=\"loadChart()\" style=\"padding:5px 14px\">Rafraichir</button>
+        </div>
+        <div id=\"chart-container\"><p class=\"chart-msg\">Selectionnez un symbole pour afficher le graphique.</p></div>
       </div>
     </div>
   </div>
@@ -257,6 +283,7 @@ def _dashboard_html() -> str:
         if (panel) panel.classList.add('active');
         if (btn.dataset.tab === 'config' && !configLoaded) loadConfig();
         if (btn.dataset.tab === 'logs') loadLogs();
+        if (btn.dataset.tab === 'charts') { populateSymbolSelector().then(loadChart); }
       });
     });
 
@@ -299,6 +326,105 @@ def _dashboard_html() -> str:
       } catch(e) {
         document.getElementById('config-content').textContent = 'Erreur de chargement.';
       }
+    }
+
+    // ── Charts tab ────────────────────────────────────────────────────────────
+
+    let _lwChart = null;
+    let _lwSeries = null;
+    let _lwVolSeries = null;
+    let _chartRefreshInterval = null;
+
+    function _ensureLightweightCharts(cb) {
+      if (window.LightweightCharts) { cb(); return; }
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js';
+      s.onload = cb;
+      document.head.appendChild(s);
+    }
+
+    async function populateSymbolSelector() {
+      try {
+        const res = await fetch('/api/config', { headers });
+        if (!res.ok) return;
+        const c = await res.json();
+        const sel = document.getElementById('chart-symbol');
+        sel.innerHTML = '';
+        (c.symbols || []).forEach(sym => {
+          const opt = document.createElement('option');
+          opt.value = sym;
+          opt.textContent = sym;
+          sel.appendChild(opt);
+        });
+      } catch(e) {}
+    }
+
+    async function loadChart() {
+      const symbol = document.getElementById('chart-symbol').value;
+      const limit  = document.getElementById('chart-limit').value;
+      if (!symbol) return;
+
+      const container = document.getElementById('chart-container');
+      container.innerHTML = '<p class=\"chart-msg\">Chargement...</p>';
+
+      let data;
+      try {
+        const encoded = encodeURIComponent(symbol);
+        const res = await fetch('/api/candles?symbol=' + encoded + '&limit=' + limit, { headers });
+        if (!res.ok) throw new Error('err');
+        const json = await res.json();
+        data = json.items || [];
+      } catch(e) {
+        container.innerHTML = '<p class=\"chart-msg\">Erreur de chargement des donnees.</p>';
+        return;
+      }
+
+      if (!data.length) {
+        container.innerHTML = '<p class=\"chart-msg\">Aucune bougie disponible. Le bot doit avoir complete au moins un cycle.</p>';
+        return;
+      }
+
+      _ensureLightweightCharts(() => {
+        container.innerHTML = '';
+
+        if (_lwChart) { _lwChart.remove(); _lwChart = null; }
+
+        const chart = LightweightCharts.createChart(container, {
+          width: container.clientWidth,
+          height: 420,
+          layout: {
+            background: { type: 'solid', color: '#fffdf6' },
+            textColor: '#1e1a16',
+          },
+          grid: {
+            vertLines: { color: 'rgba(22,93,84,0.1)' },
+            horzLines: { color: 'rgba(22,93,84,0.1)' },
+          },
+          crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+          rightPriceScale: { borderColor: 'rgba(22,93,84,0.2)' },
+          timeScale: {
+            borderColor: 'rgba(22,93,84,0.2)',
+            timeVisible: true,
+            secondsVisible: false,
+          },
+        });
+        _lwChart = chart;
+
+        const candleSeries = chart.addCandlestickSeries({
+          upColor:   '#2f7d32',
+          downColor: '#b23a2f',
+          borderVisible: false,
+          wickUpColor:   '#2f7d32',
+          wickDownColor: '#b23a2f',
+        });
+        candleSeries.setData(data);
+
+        chart.timeScale().fitContent();
+
+        window.addEventListener('resize', () => {
+          if (_lwChart) _lwChart.applyOptions({ width: container.clientWidth });
+        });
+      });
     }
 
     function renderConfig(c) {
@@ -401,13 +527,16 @@ class MobileAPIServer:
         self,
         state_provider: Callable[[], dict],
         log_provider: Callable[[int], list] | None = None,
+        candle_provider: Callable[[str, str, int], list] | None = None,
     ) -> None:
         self._state_provider = state_provider
         self._log_provider = log_provider
+        self._candle_provider = candle_provider
 
     def create_handler(self):
         state_provider = self._state_provider
         log_provider = self._log_provider
+        candle_provider = self._candle_provider
 
         class Handler(BaseHTTPRequestHandler):
             def _send_json(self, payload: dict | list, status: int = HTTPStatus.OK) -> None:
@@ -523,6 +652,26 @@ class MobileAPIServer:
                     self._send_json({"items": items})
                     return
 
+                if parsed.path == "/api/candles":
+                    symbol = (query.get("symbol") or [""])[0]
+                    timeframe = (query.get("timeframe") or [""])[0]
+                    limit = 200
+                    try:
+                        limit = int((query.get("limit") or ["200"])[0])
+                    except ValueError:
+                        pass
+                    if not symbol:
+                        self._send_json({"error": "symbol required"}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                    if not timeframe:
+                        timeframe = config.get_symbol_timeframe(symbol)
+                    if candle_provider is None:
+                        self._send_json({"symbol": symbol, "timeframe": timeframe, "items": []})
+                        return
+                    items = candle_provider(symbol, timeframe, max(1, min(limit, 2000)))
+                    self._send_json({"symbol": symbol, "timeframe": timeframe, "items": items})
+                    return
+
                 self._send_json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
 
             def log_message(self, fmt: str, *args):  # type: ignore[override]
@@ -534,8 +683,9 @@ class MobileAPIServer:
 def start_server_in_thread(
     state_provider: Callable[[], dict],
     log_provider: Callable[[int], list] | None = None,
+    candle_provider: Callable[[str, str, int], list] | None = None,
 ) -> threading.Thread:
-    server = MobileAPIServer(state_provider, log_provider)
+    server = MobileAPIServer(state_provider, log_provider, candle_provider)
     httpd = ThreadingHTTPServer((config.API_HOST, config.API_PORT), server.create_handler())
 
     def run_server() -> None:

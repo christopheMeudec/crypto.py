@@ -1,11 +1,11 @@
 """Tests unitaires du moteur de paper trading."""
 
-import json
 import threading
 
 import pytest
 
 import config
+from db import BotDatabase
 from paper_trader import PaperTrader, PositionEntry
 from tests.conftest import ADA, ADA_PRICE, BTC, BTC_PRICE, CAPITAL
 
@@ -380,41 +380,50 @@ class TestThreadSafety:
 # ===========================================================================
 
 class TestPersistance:
-    def test_state_fichier_cree_apres_achat(self, tmp_path):
-        """state.json est créé après un premier achat."""
-        trader = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+    def _make_db(self, tmp_path):
+        return BotDatabase(tmp_path / "test.db")
+
+    def test_state_enregistre_apres_achat(self, tmp_path):
+        """L'état est sauvegardé dans SQLite après un achat."""
+        db = self._make_db(tmp_path)
+        trader = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         trader.buy(BTC, BTC_PRICE)
 
-        assert (tmp_path / "state.json").exists()
+        state = db.load_state()
+        assert state is not None
+        assert state["usdt_balance"] < CAPITAL
 
     def test_state_contient_seulement_positions_ouvertes(self, tmp_path):
-        """state.json ne contient que les positions OPEN (pas les fermées)."""
-        trader = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        """Seules les positions OPEN sont persistées dans la table state."""
+        db = self._make_db(tmp_path)
+        trader = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         trader.buy(BTC, BTC_PRICE)
         trader.buy(BTC, BTC_PRICE + 500)
         trader.sell(BTC, BTC_PRICE * 1.05)  # ferme la plus ancienne
 
-        state = json.loads((tmp_path / "state.json").read_text())
+        state = db.load_state()
         assert len(state["open_entries"]) == 1
         assert state["open_entries"][0]["status"] == "OPEN"
 
     def test_reprise_solde_apres_redemarrage(self, tmp_path):
         """Le solde USDT est restauré après redémarrage."""
-        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        db = self._make_db(tmp_path)
+        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         trader1.buy(BTC, BTC_PRICE)
         balance_at_stop = trader1.usdt_balance
 
-        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
 
         assert abs(trader2.usdt_balance - balance_at_stop) < 0.001
 
     def test_reprise_positions_apres_redemarrage(self, tmp_path):
         """Les positions ouvertes sont restaurées avec leurs données exactes."""
-        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        db = self._make_db(tmp_path)
+        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         entry = trader1.buy(BTC, BTC_PRICE)
         assert entry is not None
 
-        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         open_entries = trader2.get_open_entries(BTC)
 
         assert len(open_entries) == 1
@@ -426,37 +435,53 @@ class TestPersistance:
         assert abs(restored.stop_loss_price - entry.stop_loss_price) < 0.01
         assert abs(restored.take_profit_price - entry.take_profit_price) < 0.01
 
-    def test_demarrage_zero_sans_fichier(self, tmp_path):
-        """Sans state.json, le bot démarre avec le capital initial."""
-        trader = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+    def test_demarrage_zero_sans_etat(self, tmp_path):
+        """Sans état persisté, le bot démarre avec le capital initial."""
+        db = self._make_db(tmp_path)
+        trader = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
 
         assert trader.usdt_balance == CAPITAL
         assert trader.get_open_entries_all() == []
 
-    def test_demarrage_zero_fichier_corrompu(self, tmp_path):
-        """Un state.json corrompu est ignoré et le bot démarre à zéro."""
-        (tmp_path / "state.json").write_text("{ INVALID JSON }", encoding="utf-8")
+    def test_entrees_corrompues_ignorees_solde_preserve(self, tmp_path):
+        """Des entrées JSON corrompues en DB sont ignorées mais le solde valide est conservé."""
+        import sqlite3
+        db_path = tmp_path / "test.db"
+        db = self._make_db(tmp_path)
+        db.close()
+        # Insérer un état avec des entrées JSON invalides directement en SQL
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT OR REPLACE INTO state (id, saved_at, usdt_balance, open_entries_json)"
+            " VALUES (1, '2024-01-01', 900.0, '[{INVALID}]')"
+        )
+        conn.commit()
+        conn.close()
 
-        trader = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        db2 = BotDatabase(db_path)
+        trader = PaperTrader(initial_capital=CAPITAL, persist=True, db=db2)
 
-        assert trader.usdt_balance == CAPITAL
+        # Le solde est restauré (champ valide), les entrées corrompues sont ignorées
+        assert trader.usdt_balance == 900.0
         assert trader.get_open_entries_all() == []
 
     def test_initial_capital_non_modifie(self, tmp_path):
         """initial_capital n'est pas écrasé par la restauration."""
-        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        db = self._make_db(tmp_path)
+        trader1 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
         trader1.buy(BTC, BTC_PRICE)
 
-        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, data_dir=tmp_path)
+        trader2 = PaperTrader(initial_capital=CAPITAL, persist=True, db=db)
 
         assert trader2.initial_capital == CAPITAL
 
     def test_persist_false_ne_sauvegarde_pas(self, tmp_path):
-        """Avec persist=False, aucun fichier n'est écrit."""
-        trader = PaperTrader(initial_capital=CAPITAL, persist=False, data_dir=tmp_path)
+        """Avec persist=False, rien n'est écrit en base."""
+        db = self._make_db(tmp_path)
+        trader = PaperTrader(initial_capital=CAPITAL, persist=False, db=db)
         trader.buy(BTC, BTC_PRICE)
 
-        assert not (tmp_path / "state.json").exists()
+        assert db.load_state() is None
 
 
 # ===========================================================================
