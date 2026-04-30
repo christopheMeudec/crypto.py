@@ -37,7 +37,7 @@ class _MemoryLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             self._buf.append({
-                "t": self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
+                "t": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created)),
                 "level": record.levelname,
                 "msg": record.getMessage(),
             })
