@@ -418,9 +418,14 @@ def _dashboard_html() -> str:
           wickUpColor:   '#2f7d32',
           wickDownColor: '#b23a2f',
         });
-        const now = new Date();
+        const _nowMs = Date.now();
+        const _parisStr = new Intl.DateTimeFormat('sv-SE', {
+          timeZone: 'Europe/Paris',
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }).format(new Date(_nowMs));
         const parisOffsetSec = Math.round(
-          (new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' })).getTime() - now.getTime()) / 1000
+          (new Date(_parisStr.replace(' ', 'T') + 'Z').getTime() - _nowMs) / 1000
         );
         candleSeries.setData(data.map(d => ({ ...d, time: d.time + parisOffsetSec })));
 
