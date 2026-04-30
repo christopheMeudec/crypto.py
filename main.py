@@ -154,8 +154,11 @@ def run() -> None:
         def candle_provider(symbol: str, timeframe: str, limit: int) -> list:
             return db.get_candles(symbol, timeframe, limit)
 
+        def symbols_provider() -> list:
+            return db.get_available_symbols()
+
         log_provider = lambda limit=200: _mem_handler.get_lines(limit)  # noqa: E731
-        start_server_in_thread(state_provider, log_provider, candle_provider)
+        start_server_in_thread(state_provider, log_provider, candle_provider, symbols_provider)
 
     if notifier.enabled and config.TELEGRAM_ENABLE_COMMANDS:
         def command_handler(command: str, args: list[str]) -> str:

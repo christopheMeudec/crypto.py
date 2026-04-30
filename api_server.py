@@ -345,17 +345,19 @@ def _dashboard_html() -> str:
 
     async function populateSymbolSelector() {
       try {
-        const res = await fetch('/api/config', { headers });
+        const res = await fetch('/api/symbols', { headers });
         if (!res.ok) return;
         const c = await res.json();
         const sel = document.getElementById('chart-symbol');
+        const prev = sel.value;
         sel.innerHTML = '';
-        (c.symbols || []).forEach(sym => {
+        (c.items || []).forEach(item => {
           const opt = document.createElement('option');
-          opt.value = sym;
-          opt.textContent = sym;
+          opt.value = item.symbol;
+          opt.textContent = item.symbol + ' (' + item.timeframe + ')';
           sel.appendChild(opt);
         });
+        if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
       } catch(e) {}
     }
 
@@ -416,7 +418,11 @@ def _dashboard_html() -> str:
           wickUpColor:   '#2f7d32',
           wickDownColor: '#b23a2f',
         });
-        candleSeries.setData(data);
+        const now = new Date();
+        const parisOffsetSec = Math.round(
+          (new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' })).getTime() - now.getTime()) / 1000
+        );
+        candleSeries.setData(data.map(d => ({ ...d, time: d.time + parisOffsetSec })));
 
         chart.timeScale().fitContent();
 
@@ -527,15 +533,18 @@ class MobileAPIServer:
         state_provider: Callable[[], dict],
         log_provider: Callable[[int], list] | None = None,
         candle_provider: Callable[[str, str, int], list] | None = None,
+        symbols_provider: Callable[[], list] | None = None,
     ) -> None:
         self._state_provider = state_provider
         self._log_provider = log_provider
         self._candle_provider = candle_provider
+        self._symbols_provider = symbols_provider
 
     def create_handler(self):
         state_provider = self._state_provider
         log_provider = self._log_provider
         candle_provider = self._candle_provider
+        symbols_provider = self._symbols_provider
 
         class Handler(BaseHTTPRequestHandler):
             def _send_json(self, payload: dict | list, status: int = HTTPStatus.OK) -> None:
@@ -651,6 +660,11 @@ class MobileAPIServer:
                     self._send_json({"items": items})
                     return
 
+                if parsed.path == "/api/symbols":
+                    items = symbols_provider() if symbols_provider else []
+                    self._send_json({"items": items})
+                    return
+
                 if parsed.path == "/api/candles":
                     symbol = (query.get("symbol") or [""])[0]
                     timeframe = (query.get("timeframe") or [""])[0]
@@ -683,8 +697,9 @@ def start_server_in_thread(
     state_provider: Callable[[], dict],
     log_provider: Callable[[int], list] | None = None,
     candle_provider: Callable[[str, str, int], list] | None = None,
+    symbols_provider: Callable[[], list] | None = None,
 ) -> threading.Thread:
-    server = MobileAPIServer(state_provider, log_provider, candle_provider)
+    server = MobileAPIServer(state_provider, log_provider, candle_provider, symbols_provider)
     httpd = ThreadingHTTPServer((config.API_HOST, config.API_PORT), server.create_handler())
 
     def run_server() -> None:
