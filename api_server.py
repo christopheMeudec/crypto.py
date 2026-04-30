@@ -365,6 +365,7 @@ def _dashboard_html() -> str:
       if (!symbol) return;
 
       const container = document.getElementById('chart-container');
+      if (_lwChart) { _lwChart.remove(); _lwChart = null; }
       container.innerHTML = '<p class=\"chart-msg\">Chargement...</p>';
 
       let data;
@@ -386,8 +387,6 @@ def _dashboard_html() -> str:
 
       _ensureLightweightCharts(() => {
         container.innerHTML = '';
-
-        if (_lwChart) { _lwChart.remove(); _lwChart = null; }
 
         const chart = LightweightCharts.createChart(container, {
           width: container.clientWidth,
